@@ -20,14 +20,14 @@ wheels/
 .installed.cfg
 *.egg
 
-# Виртуальное окружение
+# Virtual environment
 venv/
 ENV/
 env/
 .env/
 .venv/
 
-# IDE
+# IDEs
 .idea/
 .vscode/
 *.swp
@@ -38,12 +38,12 @@ env/
 *.sublime-workspace
 *.sublime-project
 
-# Логи
+# Logs
 logs/
 *.log
 log.txt
 
-# Локальные конфигурации
+# Local configuration
 config.local.py
 *.local.py
 .env
@@ -54,31 +54,31 @@ config.local.py
 # Created at runtime; may contain real server names/IPs - never commit.
 data/
 
-# Конфиденциальные данные
+# Sensitive data
 *.pem
 *.key
 credentials.json
 token.json
 
-# Системные файлы
+# OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Временные файлы
+# Temporary files
 *.tmp
 *.temp
 *.bak
 *.swp
 *~
 
-# Кэш и базы данных
+# Caches and databases
 *.db
 *.sqlite
 *.sqlite3
 .cache/
 
-# Специфичные для проекта
+# Project-specific
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/

@@ -220,41 +220,41 @@ class SqliteStatisticsRepository:
             # Create tables
             conn.executescript(
                 """
-                -- Таблица с агрегированной статистикой по часам
+                -- Table with hourly-aggregated statistics
                 CREATE TABLE IF NOT EXISTS hourly_stats (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     server_id TEXT NOT NULL,
                     provider_type TEXT NOT NULL DEFAULT 'vultr',
                     hour_timestamp INTEGER NOT NULL,
 
-                    -- Агрегаты
+                    -- Aggregates
                     total_pings INTEGER NOT NULL DEFAULT 0,
                     successful_pings INTEGER NOT NULL DEFAULT 0,
                     failed_pings INTEGER NOT NULL DEFAULT 0,
                     timeout_pings INTEGER NOT NULL DEFAULT 0,
 
-                    -- Время отклика (для успешных пингов)
+                    -- Response time (for successful pings)
                     total_response_time_ms REAL DEFAULT 0.0,
                     min_response_time_ms REAL,
                     max_response_time_ms REAL,
 
-                    -- Timestamp создания/обновления
+                    -- Creation/update timestamp
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL,
 
-                    -- Уникальность: один час на один сервер КОНКРЕТНОГО провайдера
-                    -- (provider_type обязателен в ключе, иначе два аккаунта с
-                    --  одинаковым server_id сливают статистику в одну строку)
+                    -- Uniqueness: one hour per server of a SPECIFIC provider
+                    -- (provider_type is required in the key, otherwise two accounts with
+                    --  the same server_id merge their statistics into one row)
                     UNIQUE(server_id, provider_type, hour_timestamp)
                 );
 
-                -- Индексы для быстрого поиска
+                -- Indexes for fast lookups
                 CREATE INDEX IF NOT EXISTS idx_hourly_stats_server_time
                     ON hourly_stats(server_id, provider_type, hour_timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_hourly_stats_timestamp
                     ON hourly_stats(hour_timestamp);
 
-                -- Таблица последних ошибок (только failed/timeout пинги)
+                -- Table of recent errors (only failed/timeout pings)
                 CREATE TABLE IF NOT EXISTS ping_errors (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     server_id TEXT NOT NULL,
@@ -265,16 +265,16 @@ class SqliteStatisticsRepository:
                     error TEXT,
                     packet_loss REAL NOT NULL DEFAULT 0.0,
 
-                    -- Новые поля для отслеживания статуса
+                    -- New fields for status tracking
                     consecutive_failures INTEGER NOT NULL DEFAULT 0,
                     current_status TEXT NOT NULL DEFAULT 'unknown',
                     previous_status TEXT NOT NULL DEFAULT 'unknown',
 
-                    -- Timestamp создания
+                    -- Creation timestamp
                     created_at INTEGER NOT NULL
                 );
 
-                -- Индексы
+                -- Indexes
                 CREATE INDEX IF NOT EXISTS idx_ping_errors_server_time
                     ON ping_errors(server_id, provider_type, timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_ping_errors_timestamp
@@ -318,7 +318,7 @@ class SqliteStatisticsRepository:
 
         except sqlite3.Error as e:
             logger.error(f"Failed to save batch: {e}", exc_info=True)
-            raise DatabaseError(f"Не удалось сохранить батч статистики: {e}") from e
+            raise DatabaseError(f"Failed to save the statistics batch: {e}") from e
 
     def _update_hourly_stats(
         self, conn: sqlite3.Connection, result: PingResult, hour_ts: int

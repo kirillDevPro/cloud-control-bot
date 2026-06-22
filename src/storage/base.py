@@ -66,15 +66,15 @@ class BaseRepository(Generic[T]):
             with open(self.file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON в {self.file_path}: {e}")
+            logger.error(f"JSON parsing error in {self.file_path}: {e}")
             # Create a timestamped backup to avoid overwriting it
             backup_path = self._create_timestamped_backup(self.file_path)
-            logger.warning(f"Создан backup повреждённого файла: {backup_path}")
+            logger.warning(f"Created backup of corrupted file: {backup_path}")
             self._write_json(self._get_empty_data())
             return self._get_empty_data()
         except (OSError, IOError) as e:
-            logger.error(f"Ошибка чтения файла {self.file_path}: {e}", exc_info=True)
-            raise FileStorageError(f"Не удалось прочитать {self.file_path}: {e}") from e
+            logger.error(f"Error reading file {self.file_path}: {e}", exc_info=True)
+            raise FileStorageError(f"Failed to read {self.file_path}: {e}") from e
 
     def _write_json(self, data: Any) -> None:
         """
@@ -115,8 +115,8 @@ class BaseRepository(Generic[T]):
             temp_path = None  # Moved successfully, nothing to clean up
 
         except (OSError, IOError, TypeError, ValueError) as e:
-            logger.error(f"Ошибка записи в файл {self.file_path}: {e}", exc_info=True)
-            raise FileStorageError(f"Не удалось записать {self.file_path}: {e}") from e
+            logger.error(f"Error writing file {self.file_path}: {e}", exc_info=True)
+            raise FileStorageError(f"Failed to write {self.file_path}: {e}") from e
 
         finally:
             # Clean up the temp file on error
@@ -161,7 +161,7 @@ class BaseRepository(Generic[T]):
         elif isinstance(data, dict):
             return list(data.values())
         else:
-            logger.warning(f"Неожиданный тип данных в {self.file_path}: {type(data)}")
+            logger.warning(f"Unexpected data type in {self.file_path}: {type(data)}")
             return []
 
     def save_all(self, data: list[dict[str, Any]]) -> None:

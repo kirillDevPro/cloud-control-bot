@@ -33,37 +33,37 @@ class PingResult(BaseModel):
     Used to store the detailed monitoring history.
     """
 
-    server_id: str = Field(..., description="ID сервера")
+    server_id: str = Field(..., description="Server ID")
 
-    provider_type: str = Field(..., description="Тип провайдера (vultr, hetzner и т.д.)")
+    provider_type: str = Field(..., description="Provider type (vultr, hetzner, etc.)")
 
-    timestamp: datetime = Field(default_factory=datetime.now, description="Время выполнения пинга")
+    timestamp: datetime = Field(default_factory=datetime.now, description="Ping execution time")
 
-    status: PingStatus = Field(..., description="Статус результата пинга")
+    status: PingStatus = Field(..., description="Ping result status")
 
     response_time_ms: float | None = Field(
         default=None,
-        description="Время отклика в миллисекундах (только для SUCCESS)",
+        description="Response time in milliseconds (only for SUCCESS)",
         ge=0.0,
     )
 
-    error: str | None = Field(default=None, description="Описание ошибки (для FAILED/TIMEOUT)")
+    error: str | None = Field(default=None, description="Error description (for FAILED/TIMEOUT)")
 
     packet_loss: float = Field(
-        default=0.0, description="Потеря пакетов в процентах", ge=0.0, le=100.0
+        default=0.0, description="Packet loss percentage", ge=0.0, le=100.0
     )
 
     consecutive_failures: int = Field(
-        default=0, description="Количество последовательных неудачных пингов", ge=0
+        default=0, description="Number of consecutive failed pings", ge=0
     )
 
     current_status: ServerStatusType = Field(
-        default="unknown", description="Текущий статус сервера (online/unknown/offline)"
+        default="unknown", description="Current server status (online/unknown/offline)"
     )
 
     previous_status: ServerStatusType = Field(
         default="unknown",
-        description="Предыдущий статус сервера (online/unknown/offline)",
+        description="Previous server status (online/unknown/offline)",
     )
 
     def __str__(self) -> str:
@@ -122,31 +122,31 @@ class PingStatistics(BaseModel):
     Used to display overall monitoring metrics.
     """
 
-    server_id: str = Field(..., description="ID сервера")
+    server_id: str = Field(..., description="Server ID")
 
-    total_pings: int = Field(default=0, description="Общее количество пингов", ge=0)
+    total_pings: int = Field(default=0, description="Total number of pings", ge=0)
 
-    successful_pings: int = Field(default=0, description="Количество успешных пингов", ge=0)
+    successful_pings: int = Field(default=0, description="Number of successful pings", ge=0)
 
-    failed_pings: int = Field(default=0, description="Количество неудачных пингов", ge=0)
+    failed_pings: int = Field(default=0, description="Number of failed pings", ge=0)
 
-    timeout_pings: int = Field(default=0, description="Количество пингов с timeout", ge=0)
+    timeout_pings: int = Field(default=0, description="Number of pings with timeout", ge=0)
 
     avg_response_time_ms: float = Field(
-        default=0.0, description="Средний response time в мс", ge=0.0
+        default=0.0, description="Average response time in ms", ge=0.0
     )
 
     min_response_time_ms: float | None = Field(
-        default=None, description="Минимальный response time в мс", ge=0.0
+        default=None, description="Minimum response time in ms", ge=0.0
     )
 
     max_response_time_ms: float | None = Field(
-        default=None, description="Максимальный response time в мс", ge=0.0
+        default=None, description="Maximum response time in ms", ge=0.0
     )
 
-    uptime_percentage: float = Field(default=100.0, description="Процент uptime", ge=0.0, le=100.0)
+    uptime_percentage: float = Field(default=100.0, description="Uptime percentage", ge=0.0, le=100.0)
 
-    last_downtime: datetime | None = Field(default=None, description="Timestamp последнего сбоя")
+    last_downtime: datetime | None = Field(default=None, description="Timestamp of the last outage")
 
     def get_display_text(self) -> str:
         """

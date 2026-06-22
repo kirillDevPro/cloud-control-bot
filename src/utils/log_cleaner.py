@@ -45,7 +45,7 @@ async def cleanup_old_logs(
     logs_path = Path(logs_dir)
 
     if not logs_path.exists():
-        logger.warning(f"Директория логов не существует: {logs_path}")
+        logger.warning(f"Logs directory does not exist: {logs_path}")
         return 0
 
     # Compute the cutoff date
@@ -70,22 +70,22 @@ async def cleanup_old_logs(
 
                     if dry_run:
                         logger.info(
-                            f"[DRY RUN] Будет удалён: {log_file.relative_to(logs_path)} "
-                            f"(возраст: {(datetime.now() - file_mtime).days} дней, "
-                            f"размер: {file_size / 1024:.2f} KB)"
+                            f"[DRY RUN] Would delete: {log_file.relative_to(logs_path)} "
+                            f"(age: {(datetime.now() - file_mtime).days} days, "
+                            f"size: {file_size / 1024:.2f} KB)"
                         )
                     else:
                         logger.info(
-                            f"Удаляю старый лог: {log_file.relative_to(logs_path)} "
-                            f"(возраст: {(datetime.now() - file_mtime).days} дней, "
-                            f"размер: {file_size / 1024:.2f} KB)"
+                            f"Deleting old log: {log_file.relative_to(logs_path)} "
+                            f"(age: {(datetime.now() - file_mtime).days} days, "
+                            f"size: {file_size / 1024:.2f} KB)"
                         )
                         log_file.unlink()
 
                     deleted_count += 1
 
             except Exception as e:
-                logger.error(f"Ошибка при обработке файла {log_file}: {e}", exc_info=True)
+                logger.error(f"Error processing file {log_file}: {e}", exc_info=True)
                 continue
 
         # Remove empty provider directories
@@ -93,14 +93,14 @@ async def cleanup_old_logs(
             await _cleanup_empty_dirs(logs_path)
 
         if deleted_count > 0:
-            action = "будет удалено" if dry_run else "удалено"
+            action = "would delete" if dry_run else "deleted"
             logger.info(
-                f"Очистка логов завершена: {action} {deleted_count} файл(ов), "
-                f"освобождено {total_size_bytes / 1024 / 1024:.2f} MB"
+                f"Log cleanup finished: {action} {deleted_count} file(s), "
+                f"freed {total_size_bytes / 1024 / 1024:.2f} MB"
             )
 
     except Exception as e:
-        logger.error(f"Ошибка при очистке логов: {e}", exc_info=True)
+        logger.error(f"Error during log cleanup: {e}", exc_info=True)
 
     return deleted_count
 
@@ -118,10 +118,10 @@ async def _cleanup_empty_dirs(logs_dir: Path) -> None:
             if subdir.is_dir():
                 # Check whether the directory is empty
                 if not any(subdir.iterdir()):
-                    logger.info(f"Удаляю пустую директорию: {subdir.relative_to(logs_dir)}")
+                    logger.info(f"Deleting empty directory: {subdir.relative_to(logs_dir)}")
                     subdir.rmdir()
     except Exception as e:
-        logger.error(f"Ошибка при удалении пустых директорий: {e}", exc_info=True)
+        logger.error(f"Error removing empty directories: {e}", exc_info=True)
 
 
 async def log_cleanup_task(
@@ -149,8 +149,8 @@ async def log_cleanup_task(
         Exception: Re-raised on any unexpected fatal error in the loop
     """
     logger.info(
-        f"Запущена фоновая задача очистки логов: "
-        f"проверка каждые {interval_hours} ч, удаление файлов старше {max_age_days} дней"
+        f"Log cleanup background task started: "
+        f"checking every {interval_hours} h, deleting files older than {max_age_days} days"
     )
 
     # Beat before the (possibly slow) initial cleanup so the supervisor never sees this
@@ -171,8 +171,8 @@ async def log_cleanup_task(
             await cleanup_old_logs(logs_dir, max_age_days)
 
     except asyncio.CancelledError:
-        logger.info("Фоновая задача очистки логов остановлена")
+        logger.info("Log cleanup background task stopped")
         raise
     except Exception as e:
-        logger.error(f"Критическая ошибка в задаче очистки логов: {e}", exc_info=True)
+        logger.error(f"Critical error in the log cleanup task: {e}", exc_info=True)
         raise

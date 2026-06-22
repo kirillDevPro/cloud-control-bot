@@ -72,7 +72,7 @@ def handle_telegram_errors(handler: F) -> F:
 
             if "message to edit not found" in error_msg:
                 logger.warning(
-                    f"Message not found in {handler_name} " "(пользователь удалил сообщение)"
+                    f"Message not found in {handler_name} " "(user deleted the message)"
                 )
                 return None
 

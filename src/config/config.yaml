@@ -1,50 +1,50 @@
-# Конфигурация приложения (несекретные настройки)
-# Секретные данные (API ключи, токены) - в файле .env
+# Application configuration (non-secret settings)
+# Secret data (API keys, tokens) lives in the .env file
 #
-# Приоритет: переменные окружения (.env) > YAML > значения по умолчанию
+# Priority: environment variables (.env) > YAML > built-in defaults
 
 # ============================================================================
-# ПРОВАЙДЕРЫ (Auto-Discovery)
+# PROVIDERS (Auto-Discovery)
 # ============================================================================
-# Провайдеры автоматически обнаруживаются из переменных окружения в .env!
-# Конфигурация здесь НЕ требуется.
+# Providers are auto-discovered from the environment variables in .env!
+# No configuration is required here.
 #
-# Паттерны переменных окружения:
+# Environment-variable patterns:
 #   - Hetzner: HETZNER_{SUFFIX}_API_KEY -> alias=hetzner_{suffix}
 #   - Vultr: VULTR_{SUFFIX}_API_KEY -> alias=vultr_{suffix}
 #   - AWS: AWS_{SUFFIX}_ACCESS_KEY_ID + AWS_{SUFFIX}_SECRET_ACCESS_KEY -> alias=aws_{suffix}
 #
-# Примеры .env:
+# .env examples:
 #   HETZNER_PROD_API_KEY=xxx  -> alias=hetzner_prod, display="Hetzner (prod)"
 #   HETZNER_STAGING_API_KEY=xxx     -> alias=hetzner_staging, display="Hetzner (staging)"
-#   VULTR_MAIN_API_KEY=xxx      -> alias=vultr_main, display="Vultr" (main скрывается)
+#   VULTR_MAIN_API_KEY=xxx      -> alias=vultr_main, display="Vultr" ("main" is hidden)
 #   AWS_PROD_ACCESS_KEY_ID=xxx  -> alias=aws_prod, display="AWS (prod)"
 #
-# Emoji автоматически: [H] для Hetzner, [V] для Vultr, [A] для AWS
+# Emoji is assigned automatically: [H] for Hetzner, [V] for Vultr, [A] for AWS
 #
-# ADMIN_IDS также в .env (Telegram User IDs администраторов)
+# ADMIN_IDS also lives in .env (Telegram user IDs of the bot admins)
 
 # ============================================================================
-# НАСТРОЙКИ МОНИТОРИНГА
+# MONITORING SETTINGS
 # ============================================================================
 monitoring:
-  ping_interval: 60      # Интервал пинга в секундах (10-3600)
-  ping_timeout: 5        # Таймаут пинга в секундах (1-30)
-  ping_attempts: 3       # Попыток перед offline (1-10)
+  ping_interval: 60      # Ping interval in seconds (10-3600)
+  ping_timeout: 5        # Ping timeout in seconds (1-30)
+  ping_attempts: 3       # Attempts before marking offline (1-10)
 
-# Настройки баланса
+# Balance settings
 balance:
-  threshold: 2000.0      # Порог уведомления в USD
-  check_interval: 10800  # Интервал проверки в секундах (3 часа)
+  threshold: 2000.0      # Alert threshold in USD
+  check_interval: 10800  # Check interval in seconds (3 hours)
 
-# Синхронизация серверов
+# Server synchronization
 sync:
-  servers_interval: 600  # Интервал синхронизации в секундах (10 минут)
+  servers_interval: 600  # Sync interval in seconds (10 minutes)
 
-# Логирование
+# Logging
 logging:
   level: INFO            # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
-# Пути
+# Paths
 data:
-  directory: data        # Директория для данных
+  directory: data        # Data directory

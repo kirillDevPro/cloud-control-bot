@@ -131,35 +131,35 @@ class Settings(BaseSettings):
 
     # === REQUIRED PARAMETERS (only in .env) ===
 
-    TELEGRAM_BOT_TOKEN: str = Field(..., description="Токен Telegram бота (получить у @BotFather)")
+    TELEGRAM_BOT_TOKEN: str = Field(..., description="Telegram bot token (obtain from @BotFather)")
 
     # === PARAMETERS FROM YAML (can be overridden in .env) ===
 
     ADMIN_IDS: str = Field(
         default="",
-        description="Список ID администраторов через запятую",
+        description="Comma-separated list of administrator IDs",
     )
 
     # Monitoring
-    PING_INTERVAL: int = Field(default=60, description="Интервал пинга в секундах", ge=10, le=3600)
+    PING_INTERVAL: int = Field(default=60, description="Ping interval in seconds", ge=10, le=3600)
 
-    PING_TIMEOUT: int = Field(default=5, description="Timeout для пинга в секундах", ge=1, le=30)
+    PING_TIMEOUT: int = Field(default=5, description="Timeout for the ping in seconds", ge=1, le=30)
 
     PING_ATTEMPTS: int = Field(
         default=3,
-        description="Количество попыток пинга перед признанием сервера недоступным",
+        description="Number of ping attempts before marking a server as unavailable",
         ge=1,
         le=10,
     )
 
     # Balance
     BALANCE_THRESHOLD: float = Field(
-        default=10.0, description="Порог баланса для уведомления (USD)", ge=0.0
+        default=10.0, description="Balance threshold for notification (USD)", ge=0.0
     )
 
     BALANCE_CHECK_INTERVAL: int = Field(
         default=21600,  # 6 hours
-        description="Интервал проверки баланса в секундах",
+        description="Balance check interval in seconds",
         ge=3600,  # minimum 1 hour
         le=86400,  # maximum 24 hours
     )
@@ -167,7 +167,7 @@ class Settings(BaseSettings):
     # Synchronization
     SERVERS_SYNC_INTERVAL: int = Field(
         default=1800,  # 30 minutes
-        description="Интервал синхронизации серверов с API провайдеров в секундах",
+        description="Server synchronization interval with provider APIs in seconds",
         ge=300,  # minimum 5 minutes
         le=86400,  # maximum 24 hours
     )
@@ -175,11 +175,11 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = Field(
         default="INFO",
-        description="Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
     # Paths
-    DATA_DIR: Path = Field(default=Path("data"), description="Директория для хранения данных")
+    DATA_DIR: Path = Field(default=Path("data"), description="Directory for storing data")
 
     # === PYDANTIC CONFIGURATION ===
 
@@ -241,7 +241,7 @@ class Settings(BaseSettings):
                 contains a non-numeric element.
         """
         if not v:
-            raise ValueError("ADMIN_IDS не может быть пустым")
+            raise ValueError("ADMIN_IDS cannot be empty")
 
         # Strip every element BEFORE validating
         ids = [admin_id.strip() for admin_id in v.split(",")]
@@ -250,15 +250,15 @@ class Settings(BaseSettings):
             if not admin_id:
                 # Empty element after stripping (e.g. "123,,456")
                 raise ValueError(
-                    f"ADMIN_IDS содержит пустые элементы. Получено: {v}"
+                    f"ADMIN_IDS contains empty elements. Received: {v}"
                 )
             if not (admin_id.isascii() and admin_id.isdigit()):
                 # str.isdigit() also accepts non-ASCII digits (superscripts, other
                 # Unicode numerics) that int() later rejects; require ASCII so the
                 # failure surfaces here at config-load time, not mid-broadcast.
                 raise ValueError(
-                    f"ADMIN_IDS должен содержать только числа, разделённые запятыми. "
-                    f"Получено: {v}"
+                    f"ADMIN_IDS must contain only numbers separated by commas. "
+                    f"Received: {v}"
                 )
 
         return v
@@ -283,7 +283,7 @@ class Settings(BaseSettings):
 
         if v_upper not in valid_levels:
             raise ValueError(
-                f"LOG_LEVEL должен быть одним из: {', '.join(valid_levels)}. " f"Получено: {v}"
+                f"LOG_LEVEL must be one of: {', '.join(valid_levels)}. " f"Received: {v}"
             )
 
         return v_upper
@@ -324,10 +324,10 @@ class Settings(BaseSettings):
 
         if not provider_configs:
             raise ValueError(
-                "Не обнаружено ни одного провайдера в переменных окружения! "
-                "Добавьте ключи в .env файл по шаблону:\n"
-                "  - Hetzner: HETZNER_{SUFFIX}_API_KEY (например, HETZNER_PROD_API_KEY)\n"
-                "  - Vultr: VULTR_{SUFFIX}_API_KEY (например, VULTR_MAIN_API_KEY)\n"
+                "No provider was found in the environment variables! "
+                "Add keys to the .env file following the template:\n"
+                "  - Hetzner: HETZNER_{SUFFIX}_API_KEY (for example, HETZNER_PROD_API_KEY)\n"
+                "  - Vultr: VULTR_{SUFFIX}_API_KEY (for example, VULTR_MAIN_API_KEY)\n"
                 "  - AWS: AWS_{SUFFIX}_ACCESS_KEY_ID + AWS_{SUFFIX}_SECRET_ACCESS_KEY"
             )
 

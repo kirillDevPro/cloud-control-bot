@@ -1,19 +1,19 @@
 # Telegram Bot Framework
 aiogram==3.22.0
 
-# HTTP клиент для API запросов
+# HTTP client for API requests
 httpx==0.28.1
 
 # ICMP Ping
 ping3==4.0.8
 
-# Конфигурация
+# Configuration
 python-dotenv==1.0.1
 pydantic==2.11.10
 pydantic-settings==2.11.0
 pyyaml==6.0.2
 
-# Работа с временными зонами
+# Time-zone handling
 pytz==2024.1
 
 # AWS SDK

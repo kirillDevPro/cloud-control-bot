@@ -38,20 +38,20 @@ class ProviderConfig(BaseModel):
         enable_lightsail: Enable Lightsail monitoring (AWS only).
     """
 
-    alias: str = Field(..., description="Уникальный идентификатор экземпляра провайдера")
-    type: ProviderType = Field(..., description="Тип провайдера")
-    display_name: str = Field(..., description="Отображаемое имя для UI")
-    emoji: str = Field(default="[?]", description="ASCII эмодзи для UI")
+    alias: str = Field(..., description="Unique provider instance identifier")
+    type: ProviderType = Field(..., description="Provider type")
+    display_name: str = Field(..., description="Display name for the UI")
+    emoji: str = Field(default="[?]", description="ASCII emoji for the UI")
 
     # AWS-specific settings
     regions: list[str] | None = Field(
         default=None,
-        description="Список AWS регионов (None = все регионы)",
+        description="List of AWS regions (None = all regions)",
     )
-    enable_ec2: bool = Field(default=True, description="Включить мониторинг EC2 инстансов")
+    enable_ec2: bool = Field(default=True, description="Enable EC2 instance monitoring")
     enable_lightsail: bool = Field(
         default=True,
-        description="Включить мониторинг Lightsail инстансов",
+        description="Enable Lightsail instance monitoring",
     )
 
     def __str__(self) -> str:

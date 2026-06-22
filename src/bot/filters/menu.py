@@ -1,7 +1,7 @@
 """Routing filter for translated main-menu reply buttons.
 
 Reply-keyboard buttons are matched by their exact visible text, so once a button
-label is translated the old ``F.text == "📊 Мониторинг"`` filter would only match
+label is translated the old ``F.text == "📊 Monitoring"`` filter would only match
 one language. :class:`MainMenuButton` matches a menu key against the label in
 EVERY supported language, so a handler keeps firing regardless of the user's
 current language.

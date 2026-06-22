@@ -69,11 +69,11 @@ class BaseBalanceRecord(BaseModel, ABC):
     All subclasses must implement the abstract properties.
     """
 
-    timestamp: datetime = Field(default_factory=datetime.now, description="Время проверки баланса")
-    provider_type: str = Field(..., description="Тип провайдера (vultr, hetzner, aws и т.д.)")
+    timestamp: datetime = Field(default_factory=datetime.now, description="Balance check timestamp")
+    provider_type: str = Field(..., description="Provider type (vultr, hetzner, aws, etc.)")
     provider_alias: str = Field(
         default="",
-        description="Alias экземпляра провайдера (например, 'hetzner_prod')",
+        description="Provider instance alias (e.g. 'hetzner_prod')",
     )
 
     @property
@@ -135,16 +135,16 @@ class PrepaidBalanceRecord(BaseBalanceRecord):
     balance: float = Field(
         ...,
         ge=0,
-        description="Текущий баланс в USD для prepaid провайдеров (положительное значение)",
+        description="Current balance in USD for prepaid providers (positive value)",
     )
     pending_charges: float = Field(
         default=0.0,
         ge=0,
-        description="Предстоящие списания в USD",
+        description="Upcoming charges in USD",
     )
-    last_payment_date: datetime | None = Field(default=None, description="Дата последнего платежа")
+    last_payment_date: datetime | None = Field(default=None, description="Date of the last payment")
     last_payment_amount: float | None = Field(
-        default=None, ge=0, description="Сумма последнего платежа в USD"
+        default=None, ge=0, description="Amount of the last payment in USD"
     )
 
     @property
@@ -205,7 +205,7 @@ class PostpaidBalanceRecord(BaseBalanceRecord):
     monthly_costs: float = Field(
         ...,
         ge=0,
-        description="Затраты за текущий месяц (MTD) в USD",
+        description="Spending for the current month (MTD) in USD",
     )
 
     @property

@@ -62,7 +62,7 @@ class ProviderFactory:
         if config.type not in cls._provider_classes:
             available = ", ".join(p.value for p in cls._provider_classes.keys())
             raise ValueError(
-                f"Провайдер {config.type.value} не поддерживается. Доступные: {available}"
+                f"Provider {config.type.value} is not supported. Available: {available}"
             )
 
         logger.info(f"Creating provider: {config.alias} (type: {config.type.value})")

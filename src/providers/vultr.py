@@ -135,19 +135,19 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             response_body = error.response.text
 
             if status == 401:
-                logger.error("Невалидный API токен Vultr!")
+                logger.error("Invalid Vultr API token!")
                 return VultrAuthenticationError(response_body=response_body)
 
             if status == 403:
                 operation = str(error.request.url.path)
-                logger.error(f"Недостаточно прав для операции: {operation}")
+                logger.error(f"Insufficient permissions for operation: {operation}")
                 return VultrPermissionError(operation=operation, response_body=response_body)
 
             if status == 404:
                 resource_type, resource_id = self._split_resource_path(
                     str(error.request.url.path)
                 )
-                logger.warning(f"{resource_type} {resource_id} не найден")
+                logger.warning(f"{resource_type} {resource_id} not found")
                 return VultrNotFoundError(
                     resource_type=resource_type,
                     resource_id=resource_id,
@@ -155,27 +155,27 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                 )
 
             if status == 429:
-                logger.error("Rate limit превышен после всех попыток")
+                logger.error("Rate limit exceeded after all retries")
                 return VultrRateLimitError(
                     retry_after=self._parse_retry_after(error.response),
                     response_body=response_body,
                 )
 
             if status >= 500:
-                logger.error(f"Ошибка сервера Vultr {status} после всех попыток")
+                logger.error(f"Vultr server error {status} after all retries")
                 return VultrServerError(status_code=status, response_body=response_body)
 
-            logger.error(f"Неожиданная ошибка API ({status})")
+            logger.error(f"Unexpected API error ({status})")
             return VultrAPIError(
-                message=f"Неожиданная ошибка Vultr API: HTTP {status}",
+                message=f"Unexpected Vultr API error: HTTP {status}",
                 status_code=status,
                 response_body=response_body,
             )
 
         if isinstance(error, (httpx.RequestError, httpx.TimeoutException)):
-            logger.error(f"Ошибка сети после всех попыток: {error}")
+            logger.error(f"Network error after all retries: {error}")
             return VultrAPIError(
-                message=f"Ошибка сети при обращении к Vultr API: {error}",
+                message=f"Network error while calling the Vultr API: {error}",
                 status_code=None,
                 response_body=None,
             )
@@ -210,8 +210,8 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             # Guard against an infinite loop
             if page > self.MAX_PAGINATION_PAGES:
                 logger.error(
-                    f"Превышен лимит страниц ({self.MAX_PAGINATION_PAGES}) для {endpoint}. "
-                    f"Возможно API вернул некорректный cursor. Прерываю pagination."
+                    f"Page limit exceeded ({self.MAX_PAGINATION_PAGES}) for {endpoint}. "
+                    f"The API may have returned an invalid cursor. Aborting pagination."
                 )
                 break
 
@@ -301,7 +301,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             return servers
 
         except Exception as e:
-            logger.error(f"Ошибка получения серверов: {e}", exc_info=True)
+            logger.error(f"Error fetching servers: {e}", exc_info=True)
             raise
 
     async def get_server(self, server_id: str) -> Server | None:
@@ -336,21 +336,21 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             instance = data.get("instance")
             if not instance:
-                logger.warning(f"Сервер {server_id} не найден в ответе API")
+                logger.warning(f"Server {server_id} not found in the API response")
                 return None
 
             return self._parse_vultr_instance(instance)
 
         except VultrNotFoundError:
             # Server not found - this is normal, return None
-            logger.warning(f"Сервер {server_id} не найден")
+            logger.warning(f"Server {server_id} not found")
             return None
         except (VultrAuthenticationError, VultrPermissionError, VultrAPIError) as e:
             # Critical API errors - re-raise
-            logger.error(f"Ошибка получения сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"Error fetching server {server_id}: {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Неожиданная ошибка получения сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error fetching server {server_id}: {e}", exc_info=True)
             raise
 
     async def _power_action(
@@ -370,14 +370,14 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
         Args:
             server_id: Server ID
             action_path: Endpoint suffix (start/halt/reboot)
-            noun: Nominative-case noun for the in-progress log (Запуск/...)
-            gen: Genitive-case noun for error logs (запуска/...)
-            done: Past participle for the success log (запущен/остановлен/...)
+            noun: Action noun for the in-progress log (Starting/...)
+            gen: Action noun for error logs (starting/...)
+            done: Past participle for the success log (started/stopped/...)
 
         Returns:
             bool: True if the operation succeeded, False otherwise
         """
-        logger.info(f"{noun} сервера {server_id}...")
+        logger.info(f"{noun} server {server_id}...")
 
         try:
 
@@ -396,17 +396,17 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             # Critical operation - 5 retries
             await self._retry_with_backoff(make_request, config=RetryConfig(max_retries=5))
 
-            logger.info(f"Сервер {server_id} {done}")
+            logger.info(f"Server {server_id} {done}")
             return True
 
         except (VultrAuthenticationError, VultrPermissionError) as e:
-            logger.error(f"Критичная ошибка {gen} сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"Critical error {gen} server {server_id}: {e}", exc_info=True)
             return False
         except VultrNotFoundError:
-            logger.error(f"Сервер {server_id} не найден для {gen}")
+            logger.error(f"Server {server_id} not found for {gen}")
             return False
         except Exception as e:
-            logger.error(f"Ошибка {gen} сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"Error {gen} server {server_id}: {e}", exc_info=True)
             return False
 
     async def start_server(self, server_id: str) -> bool:
@@ -419,7 +419,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             bool: True if the operation succeeded, False otherwise.
         """
         return await self._power_action(
-            server_id, "start", noun="Запуск", gen="запуска", done="запущен"
+            server_id, "start", noun="Starting", gen="starting", done="started"
         )
 
     async def stop_server(self, server_id: str) -> bool:
@@ -432,7 +432,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             bool: True if the operation succeeded, False otherwise.
         """
         return await self._power_action(
-            server_id, "halt", noun="Остановка", gen="остановки", done="остановлен"
+            server_id, "halt", noun="Stopping", gen="stopping", done="stopped"
         )
 
     async def shutdown_server(self, server_id: str) -> bool:
@@ -450,8 +450,8 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             bool: True if the operation succeeded, False otherwise
         """
         logger.info(
-            f"Плавное выключение сервера {server_id} "
-            f"(Vultr не поддерживает graceful shutdown, используется halt)..."
+            f"Gracefully shutting down server {server_id} "
+            f"(Vultr does not support graceful shutdown, using halt)..."
         )
         # Vultr does not distinguish shutdown from poweroff - use halt
         return await self.stop_server(server_id)
@@ -466,7 +466,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             bool: True if the operation succeeded, False otherwise.
         """
         return await self._power_action(
-            server_id, "reboot", noun="Перезагрузка", gen="перезагрузки", done="перезагружен"
+            server_id, "reboot", noun="Rebooting", gen="rebooting", done="rebooted"
         )
 
     async def get_balance(self) -> PrepaidBalanceRecord | None:
@@ -519,7 +519,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                         last_payment_date_str.replace("Z", "+00:00")
                     )
                 except ValueError:
-                    logger.warning(f"Не удалось распарсить дату: {last_payment_date_str}")
+                    logger.warning(f"Failed to parse date: {last_payment_date_str}")
 
             # Read the API value once and convert its sign (Vultr reports payments
             # as negative amounts); leave it None when the field is absent. Clamp to
@@ -542,7 +542,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             )
 
         except Exception as e:
-            logger.error(f"Ошибка получения баланса: {e}", exc_info=True)
+            logger.error(f"Error fetching balance: {e}", exc_info=True)
             raise
 
     async def health_check(self) -> bool:
@@ -569,14 +569,14 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             # health_check calls the API directly (no _retry_with_backoff), so the
             # raw httpx error surfaces here, not the typed VultrAuthenticationError.
             if e.response.status_code == 401:
-                logger.error("Невалидный API токен Vultr!", exc_info=True)
+                logger.error("Invalid Vultr API token!", exc_info=True)
             else:
-                logger.warning(f"Vultr API недоступен: HTTP {e.response.status_code}")
+                logger.warning(f"Vultr API unavailable: HTTP {e.response.status_code}")
             return False
         except httpx.RequestError as e:
-            logger.warning(f"Ошибка сети при проверке Vultr API: {e}")
+            logger.warning(f"Network error while checking the Vultr API: {e}")
             return False
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при проверке API: {e}", exc_info=True)
+            logger.error(f"Unexpected error while checking the API: {e}", exc_info=True)
             return False
 

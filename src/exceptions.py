@@ -74,7 +74,7 @@ class VultrAuthenticationError(VultrAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message="Невалидный API токен Vultr. Проверьте VULTR_{ALIAS}_API_KEY в .env файле.",
+            message="Invalid Vultr API token. Check VULTR_{ALIAS}_API_KEY in the .env file.",
             status_code=401,
             response_body=response_body,
         )
@@ -96,7 +96,7 @@ class VultrPermissionError(VultrAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Недостаточно прав для операции: {operation}",
+            message=f"Insufficient permissions for operation: {operation}",
             status_code=403,
             response_body=response_body,
         )
@@ -120,7 +120,7 @@ class VultrNotFoundError(VultrAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"{resource_type} с ID '{resource_id}' не найден",
+            message=f"{resource_type} with ID '{resource_id}' not found",
             status_code=404,
             response_body=response_body,
         )
@@ -144,9 +144,9 @@ class VultrRateLimitError(VultrAPIError):
             retry_after: Suggested wait time in seconds before retrying (optional)
             response_body: Response body from the API (optional)
         """
-        message = "Превышен лимит запросов к Vultr API"
+        message = "Vultr API rate limit exceeded"
         if retry_after:
-            message += f". Повторите через {retry_after} секунд"
+            message += f". Retry after {retry_after} seconds"
 
         super().__init__(message=message, status_code=429, response_body=response_body)
         self.retry_after = retry_after
@@ -169,7 +169,7 @@ class VultrServerError(VultrAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Ошибка на стороне Vultr API (HTTP {status_code})",
+            message=f"Vultr API server-side error (HTTP {status_code})",
             status_code=status_code,
             response_body=response_body,
         )
@@ -222,7 +222,7 @@ class HetznerAuthenticationError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message="Невалидный API токен Hetzner. Проверьте HETZNER_{ALIAS}_API_KEY в .env файле.",
+            message="Invalid Hetzner API token. Check HETZNER_{ALIAS}_API_KEY in the .env file.",
             status_code=401,
             response_body=response_body,
         )
@@ -244,7 +244,7 @@ class HetznerPermissionError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Недостаточно прав для операции: {operation}",
+            message=f"Insufficient permissions for operation: {operation}",
             status_code=403,
             response_body=response_body,
         )
@@ -268,7 +268,7 @@ class HetznerNotFoundError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"{resource_type} с ID '{resource_id}' не найден",
+            message=f"{resource_type} with ID '{resource_id}' not found",
             status_code=404,
             response_body=response_body,
         )
@@ -292,9 +292,9 @@ class HetznerRateLimitError(HetznerAPIError):
             retry_after: Suggested wait time in seconds before retrying (optional)
             response_body: Response body from the API (optional)
         """
-        message = "Превышен лимит запросов к Hetzner API (3600 req/hour)"
+        message = "Hetzner API rate limit exceeded (3600 req/hour)"
         if retry_after:
-            message += f". Повторите через {retry_after} секунд"
+            message += f". Retry after {retry_after} seconds"
 
         super().__init__(message=message, status_code=429, response_body=response_body)
         self.retry_after = retry_after
@@ -317,7 +317,7 @@ class HetznerServerError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Ошибка на стороне Hetzner API (HTTP {status_code})",
+            message=f"Hetzner API server-side error (HTTP {status_code})",
             status_code=status_code,
             response_body=response_body,
         )
@@ -341,7 +341,7 @@ class HetznerConflictError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Невозможно выполнить операцию '{operation}': сервер в состоянии '{server_status}'",
+            message=f"Cannot perform operation '{operation}': server is in state '{server_status}'",
             status_code=409,
             response_body=response_body,
         )
@@ -365,7 +365,7 @@ class HetznerLockedError(HetznerAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Сервер {resource_id} заблокирован (выполняется другая операция)",
+            message=f"Server {resource_id} is locked (another operation is in progress)",
             status_code=423,
             response_body=response_body,
         )
@@ -420,7 +420,7 @@ class AWSAuthenticationError(AWSAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message="Невалидные AWS credentials. Проверьте AWS_{ALIAS}_ACCESS_KEY_ID и AWS_{ALIAS}_SECRET_ACCESS_KEY в .env файле.",
+            message="Invalid AWS credentials. Check AWS_{ALIAS}_ACCESS_KEY_ID and AWS_{ALIAS}_SECRET_ACCESS_KEY in the .env file.",
             error_code="InvalidClientTokenId",
             response_body=response_body,
         )
@@ -443,7 +443,7 @@ class AWSPermissionError(AWSAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Недостаточно прав для операции AWS: {operation}. Проверьте IAM политики.",
+            message=f"Insufficient permissions for AWS operation: {operation}. Check the IAM policies.",
             error_code="UnauthorizedOperation",
             response_body=response_body,
         )
@@ -467,7 +467,7 @@ class AWSNotFoundError(AWSAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"{resource_type} с ID '{resource_id}' не найден в AWS",
+            message=f"{resource_type} with ID '{resource_id}' not found in AWS",
             error_code="InvalidInstanceID.NotFound",
             response_body=response_body,
         )
@@ -492,9 +492,9 @@ class AWSThrottlingError(AWSAPIError):
             retry_after: Suggested wait time in seconds before retrying (optional)
             response_body: Response body from the API (optional)
         """
-        message = "Превышен лимит запросов к AWS API (throttling)"
+        message = "AWS API request limit exceeded (throttling)"
         if retry_after:
-            message += f". Повторите через {retry_after} секунд"
+            message += f". Retry after {retry_after} seconds"
 
         super().__init__(message=message, error_code="Throttling", response_body=response_body)
         self.retry_after = retry_after
@@ -517,7 +517,7 @@ class AWSServiceError(AWSAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Ошибка на стороне AWS API ({error_code})",
+            message=f"AWS API server-side error ({error_code})",
             error_code=error_code,
             response_body=response_body,
         )
@@ -541,7 +541,7 @@ class AWSInvalidStateError(AWSAPIError):
             response_body: Response body from the API (optional)
         """
         super().__init__(
-            message=f"Невозможно выполнить операцию '{operation}': инстанс в состоянии '{current_state}'",
+            message=f"Cannot perform operation '{operation}': instance is in state '{current_state}'",
             error_code="IncorrectInstanceState",
             response_body=response_body,
         )

@@ -242,7 +242,7 @@ class ServersRepository(BaseRepository[Server]):
         existing = self.get_by_composite_key(server.composite_key)
         if existing:
             raise ValueError(
-                f"Сервер с composite_key {server.composite_key} уже существует"
+                f"Server with composite_key {server.composite_key} already exists"
             )
 
         servers = self.get_all()
@@ -280,7 +280,7 @@ class ServersRepository(BaseRepository[Server]):
 
         if not updated:
             raise ValueError(
-                f"Сервер с ID {server.id} (provider: {server.provider.value}) не найден"
+                f"Server with ID {server.id} (provider: {server.provider.value}) not found"
             )
 
         self._save_servers(servers)
@@ -318,7 +318,7 @@ class ServersRepository(BaseRepository[Server]):
 
         removed_count = initial_count - len(servers)
         if removed_count == 0:
-            logger.warning(f"Попытка удалить несуществующий сервер: {server_id}")
+            logger.warning(f"Attempt to remove a nonexistent server: {server_id}")
             return False
 
         self._save_servers(servers)
@@ -367,7 +367,7 @@ class ServersRepository(BaseRepository[Server]):
 
         server = self.get_by_id(server_id, provider)
         if not server:
-            logger.warning(f"Попытка обновить статус несуществующего сервера: {server_id}")
+            logger.warning(f"Attempt to update the status of a nonexistent server: {server_id}")
             return None
 
         server.status = status

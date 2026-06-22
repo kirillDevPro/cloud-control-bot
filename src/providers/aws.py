@@ -183,13 +183,13 @@ class AWSProvider(BaseProvider, RetryMixin):
             regions = [r["RegionName"] for r in response.get("Regions", [])]
 
             if not regions:
-                logger.warning("Не найдено ни одного AWS региона")
+                logger.warning("No AWS regions found")
                 regions = ["us-east-1"]  # Fallback
 
             # Cap the count as a safety limit
             if len(regions) > MAX_REGIONS:
                 logger.warning(
-                    f"Найдено {len(regions)} регионов, " f"ограничиваем до {MAX_REGIONS}"
+                    f"Found {len(regions)} regions, " f"capping at {MAX_REGIONS}"
                 )
                 regions = regions[:MAX_REGIONS]
 
@@ -202,7 +202,7 @@ class AWSProvider(BaseProvider, RetryMixin):
             # lost for failure classification (is_transient_error).
             raise
         except Exception as e:
-            raise AWSAPIError(f"Неожиданная ошибка получения регионов: {e}") from e
+            raise AWSAPIError(f"Unexpected error while fetching regions: {e}") from e
         finally:
             # Guarantee that the temporary EC2 client is closed
             if ec2 is not None:
@@ -360,7 +360,7 @@ class AWSProvider(BaseProvider, RetryMixin):
             Exception: A typed AWS exception describing the error.
         """
         if isinstance(error, NoCredentialsError):
-            logger.error("[FAIL] AWS credentials не найдены", exc_info=True)
+            logger.error("[FAIL] AWS credentials not found", exc_info=True)
             return AWSAuthenticationError()
         if isinstance(error, ClientError):
             return self._transform_client_error(error)
@@ -391,34 +391,34 @@ class AWSProvider(BaseProvider, RetryMixin):
         status_code = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
 
         if error_code in AWS_AUTH_ERROR_CODES:
-            logger.error(f"[FAIL] Невалидные AWS credentials: {error_code}", exc_info=True)
+            logger.error(f"[FAIL] Invalid AWS credentials: {error_code}", exc_info=True)
             return AWSAuthenticationError(str(error))
         if error_code == "UnauthorizedOperation":
             operation = error.operation_name or "unknown"
-            logger.error(f"[FAIL] Недостаточно прав для {operation}", exc_info=True)
+            logger.error(f"[FAIL] Insufficient permissions for {operation}", exc_info=True)
             return AWSPermissionError(operation, str(error))
         if error_code in ("AccessDenied", "AccessDeniedException"):
             # IAM-denied calls (incl. Cost Explorer ce:GetCostAndUsage) return
             # AccessDeniedException; map to a permission error so it is classified
             # persistent (immediate alert) and get_balance's IAM hint fires.
             operation = error.operation_name or "unknown"
-            logger.error(f"[FAIL] Доступ запрещён для {operation}", exc_info=True)
+            logger.error(f"[FAIL] Access denied for {operation}", exc_info=True)
             return AWSPermissionError(operation, str(error))
         if error_code in AWS_NOT_FOUND_CODES:
-            logger.warning(f"[WARN] Ресурс не найден: {error_code}")
+            logger.warning(f"[WARN] Resource not found: {error_code}")
             return AWSNotFoundError("Resource", "unknown", str(error))
         if error_code == "InvalidInstanceID.Malformed":
             return AWSNotFoundError("Instance", "malformed_id", str(error))
         if error_code in AWS_INVALID_STATE_CODES:
-            logger.warning(f"[WARN] Неверное состояние инстанса: {error_code}")
+            logger.warning(f"[WARN] Invalid instance state: {error_code}")
             return AWSInvalidStateError(
                 operation="unknown", current_state="unknown", response_body=str(error)
             )
         if error_code == "RequestExpired":
-            logger.error("[FAIL] Системное время не синхронизировано с AWS", exc_info=True)
+            logger.error("[FAIL] System time is not synchronized with AWS", exc_info=True)
             return AWSAuthenticationError("System time is not synchronized with AWS servers")
         if error_code in AWS_THROTTLING_CODES:
-            logger.error(f"[FAIL] AWS throttling после {MAX_RETRIES} попыток", exc_info=True)
+            logger.error(f"[FAIL] AWS throttling after {MAX_RETRIES} attempts", exc_info=True)
             return AWSThrottlingError(retry_after=int(MAX_DELAY), response_body=str(error))
         if status_code and status_code >= 500:
             logger.error(f"[FAIL] AWS server error (HTTP {status_code})", exc_info=True)
@@ -630,7 +630,7 @@ class AWSProvider(BaseProvider, RetryMixin):
                         raise result
                     # Transient region/service failure: remember it; keep per-region
                     # resilience only if at least one other fetch actually succeeds.
-                    logger.error(f"[FAIL] Ошибка получения серверов: {result}")
+                    logger.error(f"[FAIL] Error fetching servers: {result}")
                     transient_error = transient_error or result
                     continue
 
@@ -653,7 +653,7 @@ class AWSProvider(BaseProvider, RetryMixin):
             # is_transient_error can distinguish permanent errors from transient ones.
             raise
         except Exception as e:
-            logger.error(f"[FAIL] Критическая ошибка получения AWS серверов: {e}")
+            logger.error(f"[FAIL] Critical error fetching AWS servers: {e}")
             raise AWSAPIError(f"Failed to get AWS servers: {e}") from e
 
     async def _get_instances_in_region(
@@ -715,7 +715,7 @@ class AWSProvider(BaseProvider, RetryMixin):
                 # delete every server of this account). It re-raises only if EVERY
                 # enabled fetch failed; otherwise it keeps per-region resilience.
                 logger.error(
-                    f"[FAIL] Ошибка получения {service_label} в {region}: {e}", exc_info=True
+                    f"[FAIL] Error fetching {service_label} in {region}: {e}", exc_info=True
                 )
                 if isinstance(e, AWSAPIError):
                     raise
@@ -791,8 +791,8 @@ class AWSProvider(BaseProvider, RetryMixin):
                 page_count += 1
                 if page_count > MAX_PAGINATION_PAGES:
                     logger.error(
-                        f"[FAIL] Превышен лимит страниц ({MAX_PAGINATION_PAGES}) "
-                        f"для Lightsail в регионе {region}"
+                        f"[FAIL] Page limit exceeded ({MAX_PAGINATION_PAGES}) "
+                        f"for Lightsail in region {region}"
                     )
                     break
 
@@ -877,7 +877,7 @@ class AWSProvider(BaseProvider, RetryMixin):
                     raise
                 except AWSAPIError as e:
                     # Other API errors: log them and fall through to Lightsail
-                    logger.warning(f"[WARN] EC2 API error для {server_id}: {e}, пробуем Lightsail")
+                    logger.warning(f"[WARN] EC2 API error for {server_id}: {e}, trying Lightsail")
                     pass
 
             # Try Lightsail
@@ -900,11 +900,11 @@ class AWSProvider(BaseProvider, RetryMixin):
                 except AWSNotFoundError:
                     logger.debug(f"Server {server_id} not found in Lightsail either")
 
-            logger.warning(f"[WARN] AWS сервер {server_id} не найден")
+            logger.warning(f"[WARN] AWS server {server_id} not found")
             return None
 
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка получения AWS сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error fetching AWS server {server_id}: {e}", exc_info=True)
             return None
 
     # =========================================================================
@@ -940,7 +940,7 @@ class AWSProvider(BaseProvider, RetryMixin):
         if self.enable_ec2:
             try:
                 await ec2_operation(region, instance_id)
-                logger.info(f"[OK] AWS EC2 сервер {server_id} {operation_name}")
+                logger.info(f"[OK] AWS EC2 server {server_id} {operation_name}")
                 return True
             except (AWSNotFoundError, AWSAPIError) as e:
                 # It may be a Lightsail ID
@@ -950,12 +950,12 @@ class AWSProvider(BaseProvider, RetryMixin):
         if self.enable_lightsail:
             try:
                 await lightsail_operation(region, instance_id)
-                logger.info(f"[OK] AWS Lightsail сервер {server_id} {operation_name}")
+                logger.info(f"[OK] AWS Lightsail server {server_id} {operation_name}")
                 return True
             except (AWSNotFoundError, AWSAPIError) as e:
                 logger.debug(f"Lightsail {operation_name} also failed for {server_id}: {e}")
 
-        logger.error(f"[FAIL] AWS сервер {server_id} не найден")
+        logger.error(f"[FAIL] AWS server {server_id} not found")
         return False
 
     async def start_server(self, server_id: str) -> bool:
@@ -994,12 +994,12 @@ class AWSProvider(BaseProvider, RetryMixin):
             )
 
         try:
-            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "запущен")
+            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "started")
         except AWSInvalidStateError as e:
-            logger.warning(f"[WARN] Сервер {server_id} уже запущен: {e}")
+            logger.warning(f"[WARN] Server {server_id} is already running: {e}")
             return False
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка запуска AWS сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error starting AWS server {server_id}: {e}", exc_info=True)
             return False
 
     async def stop_server(self, server_id: str) -> bool:
@@ -1038,12 +1038,12 @@ class AWSProvider(BaseProvider, RetryMixin):
             )
 
         try:
-            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "остановлен")
+            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "stopped")
         except AWSInvalidStateError as e:
-            logger.warning(f"[WARN] Сервер {server_id} уже остановлен: {e}")
+            logger.warning(f"[WARN] Server {server_id} is already stopped: {e}")
             return False
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка остановки AWS сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error stopping AWS server {server_id}: {e}", exc_info=True)
             return False
 
     async def shutdown_server(self, server_id: str) -> bool:
@@ -1075,28 +1075,28 @@ class AWSProvider(BaseProvider, RetryMixin):
                         )
 
                     await self._retry_with_backoff(shutdown_ec2)
-                    logger.info(f"[OK] AWS EC2 сервер {server_id} shutdown")
+                    logger.info(f"[OK] AWS EC2 server {server_id} shutdown")
                     return True
 
                 except AWSNotFoundError:
                     logger.warning(
-                        f"[WARN] EC2 инстанс {server_id} не найден для graceful shutdown "
-                        f"(возможно, это Lightsail — graceful не поддерживается)"
+                        f"[WARN] EC2 instance {server_id} not found for graceful shutdown "
+                        f"(it may be Lightsail - graceful shutdown is not supported)"
                     )
                     return False
                 except AWSAPIError as e:
                     # Transient/permanent AWS API failure — do NOT confuse with 'unsupported'
                     logger.error(
-                        f"[FAIL] Ошибка AWS API при graceful shutdown {server_id}: {e}",
+                        f"[FAIL] AWS API error during graceful shutdown {server_id}: {e}",
                         exc_info=True,
                     )
                     return False
 
-            logger.warning(f"[WARN] Graceful shutdown недоступен для {server_id} (EC2 отключён)")
+            logger.warning(f"[WARN] Graceful shutdown unavailable for {server_id} (EC2 disabled)")
             return False
 
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка shutdown AWS сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error during shutdown of AWS server {server_id}: {e}", exc_info=True)
             return False
 
     async def reboot_server(self, server_id: str) -> bool:
@@ -1136,10 +1136,10 @@ class AWSProvider(BaseProvider, RetryMixin):
 
         try:
             return await self._try_ec2_then_lightsail(
-                server_id, ec2_op, lightsail_op, "перезагружен"
+                server_id, ec2_op, lightsail_op, "rebooted"
             )
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка перезагрузки AWS сервера {server_id}: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error rebooting AWS server {server_id}: {e}", exc_info=True)
             return False
 
     def supports_graceful_shutdown(self, server_id: str | None = None) -> bool:
@@ -1225,14 +1225,14 @@ class AWSProvider(BaseProvider, RetryMixin):
             # Parse the results
             results = response.get("ResultsByTime", [])
             if not results:
-                logger.warning("[WARN]Cost Explorer не вернул данных")
+                logger.warning("[WARN]Cost Explorer returned no data")
                 return None
 
             # Read the cost amount
             amount = results[0].get("Total", {}).get("UnblendedCost", {}).get("Amount")
 
             if amount is None:
-                logger.warning("[WARN]Cost Explorer не вернул сумму")
+                logger.warning("[WARN]Cost Explorer returned no amount")
                 return None
 
             cost = float(amount)
@@ -1246,12 +1246,12 @@ class AWSProvider(BaseProvider, RetryMixin):
 
         except AWSPermissionError:
             logger.warning(
-                "[WARN] Нет прав для Cost Explorer API. "
-                "Добавьте 'ce:GetCostAndUsage' в IAM политику."
+                "[WARN] No permissions for the Cost Explorer API. "
+                "Add 'ce:GetCostAndUsage' to the IAM policy."
             )
             return None
         except Exception as e:
-            logger.error(f"[FAIL] Ошибка получения AWS затрат: {e}", exc_info=True)
+            logger.error(f"[FAIL] Error fetching AWS costs: {e}", exc_info=True)
             return None
 
     # =========================================================================

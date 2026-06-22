@@ -45,49 +45,49 @@ class Server(BaseModel):
     A universal model shared across all cloud providers.
     """
 
-    id: str = Field(..., description="Уникальный ID сервера (от провайдера)")
+    id: str = Field(..., description="Unique server ID (from the provider)")
 
-    provider: ProviderType = Field(..., description="Тип облачного провайдера")
+    provider: ProviderType = Field(..., description="Cloud provider type")
 
     provider_alias: str = Field(
         default="",
-        description="Alias экземпляра провайдера (например, 'hetzner_prod')",
+        description="Provider instance alias (e.g. 'hetzner_prod')",
     )
 
-    name: str = Field(..., description="Пользовательское имя сервера")
+    name: str = Field(..., description="User-defined server name")
 
-    ip: str = Field(..., description="IP адрес для ping")
+    ip: str = Field(..., description="IP address for ping")
 
-    region: str = Field(..., description="Регион размещения сервера")
+    region: str = Field(..., description="Server hosting region")
 
-    plan: str = Field(..., description="Тарифный план сервера")
+    plan: str = Field(..., description="Server pricing plan")
 
     status: ServerStatus = Field(
-        default=ServerStatus.UNKNOWN, description="Текущий статус доступности"
+        default=ServerStatus.UNKNOWN, description="Current availability status"
     )
 
     last_seen: datetime | None = Field(
-        default=None, description="Timestamp последнего успешного ping"
+        default=None, description="Timestamp of the last successful ping"
     )
 
     added_at: datetime = Field(
-        default_factory=datetime.now, description="Timestamp добавления в мониторинг"
+        default_factory=datetime.now, description="Timestamp when added to monitoring"
     )
 
-    enabled: bool = Field(default=True, description="Включен ли мониторинг для этого сервера")
+    enabled: bool = Field(default=True, description="Whether monitoring is enabled for this server")
 
     # Additional fields used for display
-    os: str | None = Field(default=None, description="Операционная система")
+    os: str | None = Field(default=None, description="Operating system")
 
-    ram_mb: int | None = Field(default=None, description="Объём RAM в MB")
+    ram_mb: int | None = Field(default=None, description="RAM size in MB")
 
-    disk_gb: int | None = Field(default=None, description="Объём диска в GB")
+    disk_gb: int | None = Field(default=None, description="Disk size in GB")
 
-    vcpu_count: int | None = Field(default=None, description="Количество vCPU")
+    vcpu_count: int | None = Field(default=None, description="vCPU count")
 
     power_status: str | None = Field(
         default=None,
-        description="Статус питания сервера от провайдера (например: running, stopped)",
+        description="Server power status from the provider (e.g. running, stopped)",
     )
 
     def __str__(self) -> str:
