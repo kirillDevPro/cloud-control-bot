@@ -1,0 +1,24 @@
+# Tooling configuration (single source of truth for ruff and mypy).
+# This project is a deployed application, not a distributable package, so there
+# is intentionally no [build-system] / [project] table — these are tool configs only.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Base rule sets (E - pycodestyle errors, F - pyflakes, W - warnings)
+select = ["E", "F", "W"]
+# Globally ignored
+ignore = [
+    "E501",  # line too long - handled by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore E402 in files that need sys.path set up before imports
+"main.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+strict_optional = false

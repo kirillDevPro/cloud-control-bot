@@ -1,0 +1,7 @@
+# Development tools (linting + type-checking).
+# Pinned so local checks and CI run the exact same versions — an upstream
+# release of ruff/mypy can otherwise turn a green PR red on untouched code.
+# Tool configuration lives in pyproject.toml.
+
+ruff==0.15.18
+mypy==2.1.0
