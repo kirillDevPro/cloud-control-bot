@@ -5,12 +5,12 @@
 <h1 align="center">cloud-ping-monitor</h1>
 
 <p align="center">
-  <b>24/7 cloud-server uptime monitoring from Telegram — Vultr · Hetzner · AWS</b>
+  <b>Monitor uptime, power-control, and track costs of your cloud servers — all from Telegram. Vultr · Hetzner · AWS</b>
 </p>
 
 <p align="center">
   <a href="https://github.com/kirillDevPro/cloud-ping-monitor/actions/workflows/ci.yml"><img src="https://github.com/kirillDevPro/cloud-ping-monitor/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg" alt="Python 3.12 | 3.13"></a>
   <a href="https://docs.aiogram.dev/"><img src="https://img.shields.io/badge/aiogram-3.x-2CA5E0?logo=telegram&logoColor=white" alt="aiogram 3.x"></a>
   <img src="https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20UK-success" alt="i18n: EN | RU | UK">
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
@@ -24,13 +24,16 @@
   <a href="#installation">Installation</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#running">Running</a> ·
-  <a href="#development">Development</a>
+  <a href="#deployment-247">Deployment</a> ·
+  <a href="#adding-a-new-provider">Adding a provider</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
-A Telegram bot for monitoring cloud-server availability across **Vultr**, **Hetzner**,
-and **AWS** via ICMP ping. It watches your instances around the clock, alerts you the
-moment one goes down (or comes back), lets you start / stop / reboot servers from chat,
-and keeps an eye on provider balances and costs.
+A Telegram bot to **monitor, power-manage, and track the cost** of your cloud servers across
+**Vultr**, **Hetzner**, and **AWS**. It watches your instances around the clock via ICMP ping,
+alerts you the moment one goes down (or comes back), lets you start / stop / reboot servers
+straight from chat, and keeps an eye on provider balances and costs.
 
 Built on [aiogram 3.x](https://docs.aiogram.dev/), with one isolated worker process per
 server, supervised background tasks, and heartbeat-based stall detection for unattended
@@ -39,6 +42,19 @@ server, supervised background tasks, and heartbeat-based stall detection for una
 > The bot's user-facing text is available in **English, Russian, and Ukrainian** — default
 > English, with each user picking their language in Settings (or `/language`). The code,
 > docstrings, and this documentation are in English.
+
+<!-- Screenshots: add three cropped Telegram screenshots to assets/screenshots/
+     (see assets/screenshots/README.md), then uncomment this block.
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/main-menu.png" alt="Main menu" width="280">
+  <img src="assets/screenshots/alert.png" alt="Up/down alert" width="280">
+  <img src="assets/screenshots/balance.png" alt="Balance view" width="280">
+</p>
+
+---
+-->
 
 ---
 
@@ -123,10 +139,14 @@ main.py              entry point
 
 ## Requirements
 
-- **Python 3.12+**
-- **Raw-socket / ICMP privileges.** ICMP ping requires elevated privileges:
+- **Python 3.12+** (CI runs the suite on 3.12 and 3.13).
+- **Raw-socket / ICMP privileges.** ICMP ping requires the `CAP_NET_RAW` capability:
   - Linux: run as root, or grant the capability once with
-    `sudo setcap cap_net_raw+ep $(readlink -f $(which python3))`.
+    `sudo setcap cap_net_raw+ep $(readlink -f $(which python3))`. Note a `setcap` grant
+    is **invalidated whenever the interpreter is replaced** (a pip/apt upgrade or venv
+    rebuild) and applies to every script that interpreter runs — for a real deployment
+    prefer the scoped capability of the [Docker](#deployment-247) (`cap_add: NET_RAW`) or
+    systemd (`AmbientCapabilities=CAP_NET_RAW`) setups below.
   - Windows: run the terminal / service as Administrator.
 - API credentials for at least one provider (see below).
 
@@ -230,6 +250,39 @@ cache) and logs in `logs/` — both are gitignored and safe to delete to reset s
 
 ---
 
+## Deployment (24/7)
+
+For unattended operation, run the bot under a process manager that restarts it on
+crash — the in-app supervisor only restarts background *tasks*, not the `main.py`
+process itself.
+
+### Docker (recommended)
+
+```bash
+cp .env.example .env   # fill in your tokens/keys
+docker compose up -d --build
+docker compose logs -f
+```
+
+The provided `docker-compose.yml` reads secrets from `.env`, runs the process
+unprivileged with only `CAP_NET_RAW` (for ICMP), persists `data/` and `logs/` in named
+volumes, and restarts automatically (`restart: unless-stopped`).
+
+### systemd (without Docker)
+
+A sample unit lives at [`deploy/cloud-ping-monitor.service`](deploy/cloud-ping-monitor.service).
+It restarts the process on failure and grants `CAP_NET_RAW` via `AmbientCapabilities`
+(no `setcap` needed). Adjust the paths/user, then:
+
+```bash
+sudo cp deploy/cloud-ping-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cloud-ping-monitor
+journalctl -u cloud-ping-monitor -f
+```
+
+---
+
 ## Adding a new provider
 
 1. Create a subclass of `BaseProvider, RetryMixin, HttpClientMixin` in `src/providers/`.
@@ -243,28 +296,54 @@ cache) and logs in `logs/` — both are gitignored and safe to delete to reset s
 
 ## Development
 
-Install the dev tools (not pinned in `requirements.txt`):
+Install the pinned dev tools (ruff, mypy):
 
 ```bash
-pip install ruff mypy
+pip install -r requirements-dev.txt
 ```
 
-Then run the same checks CI runs:
+Then run the same checks CI runs (ruff/mypy configured in `pyproject.toml`):
 
 ```bash
-ruff check src main.py
-mypy src --ignore-missing-imports --no-strict-optional
+ruff check src main.py scripts/check_i18n_locales.py
+mypy src main.py scripts/check_i18n_locales.py
+python scripts/check_i18n_locales.py   # EN/RU/UK locale parity
 ```
 
-Both checks run automatically in CI on every push and pull request.
+All three run automatically in CI on every push and pull request, across Linux and
+Windows on Python 3.12 and 3.13.
+
+---
+
+## Troubleshooting
+
+- **`PermissionError` / "Operation not permitted" on ping, or every server shows
+  offline.** The process lacks raw-socket privileges — see
+  [Requirements](#requirements) (Linux `setcap` / `CAP_NET_RAW`, Windows Administrator).
+- **The bot ignores you / "access denied".** Your Telegram user ID isn't in `ADMIN_IDS`.
+  Get your ID from [@userinfobot](https://t.me/userinfobot) and add it (comma-separated)
+  in `.env`, then restart.
+- **No providers detected.** Check the env-var *shape*: Hetzner/Vultr need `*_API_KEY`,
+  AWS needs **both** `*_ACCESS_KEY_ID` and `*_SECRET_ACCESS_KEY` for the same suffix
+  (see [Provider auto-discovery](#provider-auto-discovery)).
 
 ---
 
 ## Contributing
 
 Issues and pull requests are welcome. Please run `ruff` and `mypy` before opening a PR and
-keep the existing conventions: docstrings and comments in English, user-facing strings in
-Russian.
+keep the existing conventions: code, docstrings, and comments in English; user-facing
+strings go through the i18n catalog (`src/bot/i18n/locales/`) — English (`en.py`) is the
+source of truth, Russian and Ukrainian are translations of it, never hard-code a UI string.
+Adding a new message means adding it to all three locales (the `python scripts/check_i18n_locales.py`
+parity check, which CI runs, fails otherwise).
+
+---
+
+## Security
+
+The bot holds cloud-provider API keys and can power-manage live servers. See
+[SECURITY.md](SECURITY.md) for the disclosure process and operator hardening notes.
 
 ---
 
