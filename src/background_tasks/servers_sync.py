@@ -11,7 +11,7 @@ from ..storage import ServersRepository, SqliteStatisticsRepository
 from ..exceptions import is_transient_error
 from .ping_processor import forget_server
 from ..bot.notifications import (
-    render_message,
+    render_error_message,
     send_server_added_notification,
     send_server_removed_notification,
     send_critical_error_notification,
@@ -138,7 +138,7 @@ async def servers_sync_task(
                                     provider_label=provider_label,
                                     duration_seconds=failures * sync_interval,
                                     failures=failures,
-                                    last_error=str(result),
+                                    last_error=result,
                                 )
                         elif incident_kind.get(alias) != "persistent":
                             # Persistent error (auth/permissions): requires manual
@@ -152,8 +152,8 @@ async def servers_sync_task(
                                 admin_ids=admin_ids,
                                 title_key="alert.provider_api.title",
                                 title_kwargs={"provider": provider_label},
-                                body=render_message(
-                                    "alert.servers_fetch_failed.body", error=str(result)
+                                body=render_error_message(
+                                    "alert.servers_fetch_failed.body", result
                                 ),
                             )
                         continue

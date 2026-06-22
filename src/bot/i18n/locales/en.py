@@ -151,6 +151,15 @@ MESSAGES: dict[str, str] = {
     'srv.op_error_body': 'The operation for server <b>{name}</b> could not be completed.',
     'srv.op_error_details': '<b>Details:</b> {error}',
     'srv.op_error_retry': 'Try again later or contact the administrator.',
+    # provider error details (localized exception text; full technical detail stays in logs)
+    'error.invalid_token': 'Invalid {provider} API token — check the credentials in your .env file.',
+    'error.permission': 'Insufficient permissions for the operation: {operation}.',
+    'error.not_found': '{resource_type} with ID «{resource_id}» not found.',
+    'error.rate_limit': '{provider} API rate limit exceeded — please try again shortly.',
+    'error.server_side': '{provider} API error on the provider side — a temporary issue, try again later.',
+    'error.conflict': 'Cannot perform «{operation}»: the server is in state «{state}».',
+    'error.locked': 'Server {resource_id} is busy — another operation is in progress.',
+    'error.provider_api': 'Error communicating with the {provider} API — a temporary problem, please try again later.',
     # action
     'action.start.done': 'started',
     'action.stop.done': 'stopped',

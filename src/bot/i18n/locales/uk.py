@@ -151,6 +151,15 @@ MESSAGES: dict[str, str] = {
     'srv.op_error_body': 'Не вдалося виконати операцію для сервера <b>{name}</b>.',
     'srv.op_error_details': '<b>Деталі:</b> {error}',
     'srv.op_error_retry': 'Спробуйте пізніше або зверніться до адміністратора.',
+    # provider error details (localized exception text; full technical detail stays in logs)
+    'error.invalid_token': 'Недійсний API-токен {provider} — перевірте облікові дані у файлі .env.',
+    'error.permission': 'Недостатньо прав для операції: {operation}.',
+    'error.not_found': '{resource_type} з ID «{resource_id}» не знайдено.',
+    'error.rate_limit': 'Перевищено ліміт запитів до API {provider} — спробуйте трохи згодом.',
+    'error.server_side': 'Помилка на боці {provider} — тимчасова проблема, спробуйте пізніше.',
+    'error.conflict': 'Неможливо виконати «{operation}»: сервер у стані «{state}».',
+    'error.locked': 'Сервер {resource_id} зайнятий — виконується інша операція.',
+    'error.provider_api': 'Помилка під час звернення до API {provider} — тимчасова проблема, спробуйте пізніше.',
     # action
     'action.start.done': 'запущено',
     'action.stop.done': 'зупинено',

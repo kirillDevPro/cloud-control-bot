@@ -19,7 +19,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramRetryAfter
 
 from .formatters.common import esc
-from .i18n import get_user_language, translate, translate_plural
+from .i18n import get_user_language, translate, translate_error, translate_plural
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,25 @@ def render_message(key: str, **kwargs: object) -> Renderer:
     """
     safe = _escape_str_kwargs(kwargs)
     return lambda language: translate(key, language, **safe)
+
+
+def render_error_message(key: str, error: BaseException) -> Renderer:
+    """Build a per-recipient renderer that embeds a localized exception detail.
+
+    The exception is localized in EACH recipient's own language (so a provider
+    failure reads in their UI language, not the language the code raised it in)
+    and HTML-escaped before being interpolated into the wrapper template ``key``
+    as ``{error}``. Use this instead of ``render_message(key, error=str(exc))``,
+    which would freeze the detail in one language for every recipient.
+
+    Args:
+        key: Catalog key whose template contains an ``{error}`` placeholder.
+        error: The exception whose detail to localize and embed.
+
+    Returns:
+        Renderer: ``language -> wrapper template with the per-language error``.
+    """
+    return lambda language: translate(key, language, error=esc(translate_error(error, language)))
 
 
 def render_plural(key: str, n: int, **kwargs: object) -> Renderer:
@@ -370,7 +389,7 @@ async def send_provider_outage_notification(
     provider_label: str,
     duration_seconds: int,
     failures: int,
-    last_error: str,
+    last_error: BaseException,
 ) -> None:
     """
     Send a notification about a SUSTAINED transient provider outage.
@@ -387,12 +406,13 @@ async def send_provider_outage_notification(
         provider_label: Human-readable provider name (display_name)
         duration_seconds: Outage duration in seconds (localized per recipient)
         failures: Number of consecutive failed checks
-        last_error: Text of the last error
+        last_error: The last error exception; localized per recipient (its full
+            technical text is logged separately, not shown here)
 
     Returns:
         None.
     """
-    provider, error_safe = esc(provider_label), esc(last_error)
+    provider = esc(provider_label)
     duration_render = _render_duration(duration_seconds)
 
     def render(language: str) -> str:
@@ -415,7 +435,11 @@ async def send_provider_outage_notification(
                 checks=checks,
             )
             + "\n\n"
-            + translate("notif.provider_outage.last_error", language, error=error_safe)
+            + translate(
+                "notif.provider_outage.last_error",
+                language,
+                error=esc(translate_error(last_error, language)),
+            )
             + "\n\n"
             + translate("notif.provider_outage.footer", language)
         )

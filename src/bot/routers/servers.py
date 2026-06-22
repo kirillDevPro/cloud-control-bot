@@ -14,7 +14,7 @@ from ...providers.base import BaseProvider
 from ...storage import ServersRepository, SqliteStatisticsRepository
 from ...providers.manager import ProviderManager
 from ..filters import MainMenuButton
-from ..i18n import _, plural
+from ..i18n import _, localize_error, plural
 from ..keyboards import (
     get_servers_management_keyboard,
     get_server_control_keyboard,
@@ -318,7 +318,7 @@ async def _execute_power_action(
         # Reset the cooldown on error
         clear_operation_cooldown(server.composite_key)
         logger.error(f"Failed to execute operation '{action}': {e}", exc_info=True)
-        text = format_operation_result(action, server.get_display_name(), False, str(e))
+        text = format_operation_result(action, server.get_display_name(), False, localize_error(e))
         await safe_edit_message(callback, text)
 
 
