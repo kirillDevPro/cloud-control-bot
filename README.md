@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" alt="cloud-control-bot" width="180" height="180">
+  <img src="assets/hero.png" alt="Cloud Control Bot — Telegram bot for server monitoring, provider balances, uptime tracking and quick server actions" width="880">
 </p>
 
-<h1 align="center">cloud-control-bot</h1>
+<h1 align="center">Cloud Control Bot</h1>
 
 <p align="center">
   <b>Monitor uptime, power-control, and track costs of your cloud servers — all from Telegram. Vultr · Hetzner · AWS</b>
@@ -42,19 +42,6 @@ server, supervised background tasks, and heartbeat-based stall detection for una
 > The bot's user-facing text is available in **English, Russian, and Ukrainian** — default
 > English, with each user picking their language in Settings (or `/language`). The code,
 > docstrings, and this documentation are in English.
-
-<!-- Screenshots: add three cropped Telegram screenshots to assets/screenshots/
-     (see assets/screenshots/README.md), then uncomment this block.
-## Screenshots
-
-<p align="center">
-  <img src="assets/screenshots/main-menu.png" alt="Main menu" width="280">
-  <img src="assets/screenshots/alert.png" alt="Up/down alert" width="280">
-  <img src="assets/screenshots/balance.png" alt="Balance view" width="280">
-</p>
-
----
--->
 
 ---
 
