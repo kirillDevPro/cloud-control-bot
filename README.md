@@ -24,6 +24,7 @@
   <a href="#installation">Installation</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#running">Running</a> ·
+  <a href="#running-on-windows">Windows</a> ·
   <a href="#deployment-247">Deployment</a> ·
   <a href="#adding-a-new-provider">Adding a provider</a> ·
   <a href="#development">Development</a> ·
@@ -234,6 +235,25 @@ In Telegram, open the bot and use `/start`. The main menu exposes **Monitoring**
 
 Runtime data lives in `data/` (server cache, balance history, SQLite statistics, callback
 cache) and logs in `logs/` — both are gitignored and safe to delete to reset state.
+
+### Running on Windows
+
+The bot runs on **Windows Server 2016 and newer** (2019 / 2022 / 2025) and **Windows 10 / 11** —
+anything Python 3.12+ installs on. There is no separate Windows build; `python main.py` is identical
+on every platform, and `multiprocessing` uses the native `spawn` start method.
+
+One Windows-specific requirement: **run it as Administrator.** ICMP ping uses raw sockets, which on
+Windows are only available to elevated processes. Without admin rights every ping fails and *all*
+servers are reported offline. Start an elevated terminal ("Run as administrator"), then:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python main.py
+```
+
+For unattended 24/7 operation, register it as a Windows service that restarts on crash and runs
+elevated — Task Scheduler (built in: *Run with highest privileges* + *Run whether user is logged on
+or not*) or a service wrapper such as [NSSM](https://nssm.cc/) both work.
 
 ---
 
