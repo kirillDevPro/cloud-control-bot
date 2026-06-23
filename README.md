@@ -14,7 +14,7 @@
   <a href="https://docs.aiogram.dev/"><img src="https://img.shields.io/badge/aiogram-3.x-2CA5E0?logo=telegram&logoColor=white" alt="aiogram 3.x"></a>
   <img src="https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20UK%20%7C%20ES-success" alt="i18n: EN | RU | UK | ES">
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange.svg" alt="License: PolyForm Noncommercial 1.0.0"></a>
   <a href="https://github.com/kirillDevPro/cloud-control-bot/stargazers"><img src="https://img.shields.io/github/stars/kirillDevPro/cloud-control-bot?style=social" alt="GitHub stars"></a>
 </p>
 
@@ -356,4 +356,7 @@ The bot holds cloud-provider API keys and can power-manage live servers. See
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE) — **not** an
+OSI open-source license. You may install, run, and modify this bot for **noncommercial
+purposes only**: personal, educational, research, or other non-profit use. **Commercial
+use is not permitted.**
