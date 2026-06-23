@@ -165,7 +165,7 @@ def format_monitoring_dashboard(
     # Aggregate 24-hour ping statistics on a single compact line.
     if total_pings > 0:
         stats_body = (
-            f"✅ {format_number(successful_pings)}/{format_number(total_pings)}"
+            f"✅ {format_number(successful_pings)}"
             f" · ❌ {format_number(failed_pings)} · ⏱ {format_number(timeout_pings)}"
             f" · ⬆ {avg_uptime:.2f}%"
         )
