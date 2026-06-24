@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     2. YAML configuration (config.yaml)
     3. Default values
 
+    BALANCE_THRESHOLD is a startup seed for runtime_settings: once an admin changes
+    the low-balance threshold or alert toggle in the bot, data/runtime_settings.json
+    owns both runtime values until that file is removed.
+
     PROVIDERS: Automatically discovered from environment variables (auto-discovery).
     Variable patterns:
     - Hetzner: HETZNER_{SUFFIX}_API_KEY -> alias=hetzner_{suffix}
@@ -133,7 +137,7 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = Field(..., description="Telegram bot token (obtain from @BotFather)")
 
-    # === PARAMETERS FROM YAML (can be overridden in .env) ===
+    # === RUNTIME PARAMETERS (env/defaults; selected fields also map from YAML) ===
 
     ADMIN_IDS: str = Field(
         default="",
@@ -154,7 +158,7 @@ class Settings(BaseSettings):
 
     # Balance
     BALANCE_THRESHOLD: float = Field(
-        default=10.0, description="Balance threshold for notification (USD)", ge=0.0
+        default=100.0, description="Balance threshold for notification (USD)", ge=0.0
     )
 
     BALANCE_CHECK_INTERVAL: int = Field(
@@ -421,6 +425,14 @@ class Settings(BaseSettings):
             Path: DATA_DIR joined with "balance_history.json".
         """
         return self.DATA_DIR / "balance_history.json"
+
+    def get_runtime_settings_file(self) -> Path:
+        """Return the path to the runtime_settings.json file.
+
+        Returns:
+            Path: DATA_DIR joined with "runtime_settings.json".
+        """
+        return self.DATA_DIR / "runtime_settings.json"
 
 
 # === SINGLETON ===

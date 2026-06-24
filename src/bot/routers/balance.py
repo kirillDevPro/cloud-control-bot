@@ -5,7 +5,6 @@ import logging
 from aiogram import F, Router
 from aiogram.types import Message, CallbackQuery
 
-from ...config import Settings
 from ...storage.balance import BalanceRepository
 from ...providers.manager import ProviderManager
 from ..filters import MainMenuButton
@@ -13,7 +12,6 @@ from ..i18n import _
 from ..keyboards import (
     get_balance_main_keyboard,
     get_balance_history_keyboard,
-    get_balance_settings_keyboard,
     get_balance_provider_keyboard,
 )
 from ..utils import safe_edit_message, handle_telegram_errors, show_screen
@@ -21,7 +19,6 @@ from ..formatters import (
     collect_provider_balances,
     format_balance_main,
     format_balance_history,
-    format_balance_settings,
     format_balance_provider_detail,
 )
 
@@ -203,28 +200,6 @@ async def callback_balance_history(
         text,
         get_balance_history_keyboard(period=period, provider_alias=provider_filter),
     )
-
-
-@balance_router.callback_query(F.data == "balance_settings")
-@handle_telegram_errors
-async def callback_balance_settings(callback: CallbackQuery, settings: Settings) -> None:
-    """
-    Show the current balance settings in the existing balance screen.
-
-    Args:
-        callback: Callback query from the settings button.
-        settings: Application settings containing balance thresholds/options.
-
-    Returns:
-        None.
-    """
-    await callback.answer()
-
-    # Format the settings message
-    text = format_balance_settings(settings)
-
-    # Safely update the message
-    await safe_edit_message(callback, text, get_balance_settings_keyboard())
 
 
 @balance_router.callback_query(F.data == "balance_back_to_main")

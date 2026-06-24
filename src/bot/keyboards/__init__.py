@@ -14,11 +14,12 @@ from .inline import (
     get_confirmation_keyboard,
     get_balance_main_keyboard,
     get_balance_history_keyboard,
-    get_balance_settings_keyboard,
     get_balance_provider_keyboard,
     get_provider_selection_keyboard,
     get_settings_menu_keyboard,
     get_language_keyboard,
+    get_balance_alerts_keyboard,
+    get_balance_threshold_cancel_keyboard,
     SETTINGS_SECTIONS,
 )
 
@@ -26,6 +27,8 @@ __all__ = [
     "get_main_menu_keyboard",
     "get_settings_menu_keyboard",
     "get_language_keyboard",
+    "get_balance_alerts_keyboard",
+    "get_balance_threshold_cancel_keyboard",
     "SETTINGS_SECTIONS",
     "get_monitoring_keyboard",
     "get_server_details_keyboard",
@@ -35,7 +38,6 @@ __all__ = [
     "get_confirmation_keyboard",
     "get_balance_main_keyboard",
     "get_balance_history_keyboard",
-    "get_balance_settings_keyboard",
     "get_balance_provider_keyboard",
     "get_provider_selection_keyboard",
 ]

@@ -18,7 +18,6 @@ from .balance import (
     collect_provider_balances,
     format_balance_main,
     format_balance_history,
-    format_balance_settings,
     format_balance_provider_detail,
 )
 
@@ -41,6 +40,5 @@ __all__ = [
     "collect_provider_balances",
     "format_balance_main",
     "format_balance_history",
-    "format_balance_settings",
     "format_balance_provider_detail",
 ]

@@ -1,6 +1,5 @@
 """Formatters for the balance router."""
 
-from ...config import Settings
 from ...storage.balance import (
     BalanceRecord,
     BalanceRepository,
@@ -9,8 +8,8 @@ from ...storage.balance import (
 )
 from ...providers.manager import ProviderManager
 from ..i18n import _, plural
-from ..utils.rich import blocks, details, stack
-from .common import format_days_as_period, esc, plain
+from ..utils.rich import blocks, stack
+from .common import format_days_as_period, esc
 
 
 def collect_provider_balances(
@@ -46,7 +45,7 @@ def collect_provider_balances(
 
     # providers returns dict[str, tuple[BaseProvider, ProviderConfig]]
     for alias, (provider, config) in providers.items():
-        # Look up the balance by alias (new format)
+        # Look up the latest balance by provider alias.
         latest_record = balance_repo.get_latest_record(provider_alias=alias)
 
         # Determine charges depending on the record type
@@ -228,39 +227,6 @@ def format_balance_history(
         sections.append(_("bal.history_all_providers"))
 
     return blocks(*sections)
-
-
-def format_balance_settings(settings: Settings) -> str:
-    """
-    Format the balance settings screen.
-
-    Args:
-        settings: Application settings
-
-    Returns:
-        str: Formatted message in the active language
-    """
-    # The env-var "how to change" instructions are secondary, so they live in a
-    # collapsible <details> block under the always-visible current values.
-    how_to_body = stack(
-        _("bal.settings_env_line"),
-        f"• <code>BALANCE_THRESHOLD={settings.BALANCE_THRESHOLD}</code>",
-        f"• <code>BALANCE_CHECK_INTERVAL={settings.BALANCE_CHECK_INTERVAL}</code>",
-        _("bal.settings_restart"),
-    )
-
-    return blocks(
-        _("bal.settings_title"),
-        stack(
-            _("bal.settings_threshold", value=settings.BALANCE_THRESHOLD),
-            _("bal.settings_threshold_hint"),
-        ),
-        stack(
-            _("bal.settings_interval", hours=settings.BALANCE_CHECK_INTERVAL / 3600),
-            _("bal.settings_interval_hint"),
-        ),
-        details(plain(_("bal.settings_how_to")), how_to_body),
-    )
 
 
 # Balance-trend value -> (emoji, catalog key). The dict keys are code-coupled

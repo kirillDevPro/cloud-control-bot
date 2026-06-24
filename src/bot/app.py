@@ -82,6 +82,13 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     1. Middleware (MUST come BEFORE routers!)
     2. Routers
 
+    FSM storage is the aiogram default in-memory backend (no ``storage=`` passed):
+    fine for the only FSM flow — the short-lived, admin-only custom balance-threshold
+    input — whose state is intentionally transient and is re-armed/cleared on the next
+    interaction. A bot restart mid-input loses that state harmlessly (the prompt's
+    Cancel re-renders cleanly). Switch to a persistent storage only if multi-replica or
+    multi-step flows are added.
+
     Args:
         settings: Application settings
 

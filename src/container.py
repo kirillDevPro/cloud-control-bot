@@ -4,7 +4,7 @@ Provides:
 - Centralized construction of all components
 - Correct initialization order
 - Graceful shutdown in reverse order
-- Simplified testing through a mock container
+- A single object that can be passed to startup, tasks, handlers, and shutdown
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ class ApplicationContainer:
     """
     Application dependency container.
 
-    Holds all components required for the application to run.
-    Ensures the correct initialization and shutdown order.
+    Holds all components required for the application to run. The builder creates
+    these components in dependency order; shutdown closes them in reverse order.
 
     Attributes:
         settings: Application configuration.
@@ -178,6 +178,16 @@ class ContainerBuilder:
         from .bot.i18n import init_language_store
 
         init_language_store(settings.DATA_DIR)
+
+        # Load the runtime-mutable global settings (low-balance alert threshold +
+        # on/off switch the admin changes from the Settings menu), seeding the
+        # threshold from the configured default until it is overridden in-bot.
+        from .storage.runtime_settings import init_runtime_settings
+
+        init_runtime_settings(
+            settings.get_runtime_settings_file(),
+            default_threshold=settings.BALANCE_THRESHOLD,
+        )
 
         # 2. Providers
         logger.debug("Initializing providers...")

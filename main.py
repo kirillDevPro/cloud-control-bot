@@ -37,6 +37,7 @@ from src.background_tasks.supervisor import TaskFactory, supervise_background_ta
 from src.config import get_settings
 from src.container import ApplicationContainer, ContainerBuilder
 from src.models import Server
+from src.storage.runtime_settings import are_balance_alerts_enabled, get_balance_threshold
 from src.utils.log_cleaner import log_cleanup_task
 from src.utils.logger import configure_third_party_loggers, setup_main_logger
 
@@ -223,7 +224,8 @@ async def start_background_tasks(
                 provider_manager=app.provider_manager,
                 admin_ids=app.admin_ids,
                 check_interval=app.settings.BALANCE_CHECK_INTERVAL,
-                threshold=app.settings.BALANCE_THRESHOLD,
+                threshold_getter=get_balance_threshold,
+                alerts_enabled_getter=are_balance_alerts_enabled,
                 heartbeat=heartbeats.bound_beat("balance_checker"),
             ),
         )

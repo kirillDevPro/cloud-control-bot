@@ -280,11 +280,9 @@ async def send_low_balance_notification(
     threshold: float,
     days_left: float | None,
     provider_name: str = "Unknown",
-) -> None:
+) -> bool:
     """
     Send a low balance notification.
-
-    Delivery failures are logged by _broadcast_to_admins() and not returned to the caller.
 
     Args:
         bot: Bot instance
@@ -295,7 +293,9 @@ async def send_low_balance_notification(
         provider_name: Provider name (VULTR, HETZNER, etc.)
 
     Returns:
-        None.
+        bool: True if the alert was delivered to at least one administrator, False if
+            every send failed. balance_checker gates its anti-flap cooldown on this, so
+            an undelivered alert is retried on the next cycle instead of being lost.
     """
     provider = esc(provider_name)
 
@@ -323,9 +323,11 @@ async def send_low_balance_notification(
             # on a fully-depleted balance still shows the "depleted" line.
             message += translate("notif.low_balance.depleted", language) + "\n\n"
         message += translate("notif.low_balance.top_up", language, provider=provider)
+        # Short pointer so recipients know the threshold/on-off is now in Settings.
+        message += "\n\n" + translate("notif.low_balance.settings_hint", language)
         return message
 
-    await _broadcast_to_admins(
+    return await _broadcast_to_admins(
         bot, admin_ids, render, log_label=f"low balance notification for {provider_name}"
     )
 

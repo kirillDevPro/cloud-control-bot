@@ -34,7 +34,7 @@ monitoring:
 
 # Balance settings
 balance:
-  threshold: 2000.0      # Alert threshold in USD
+  threshold: 100.0       # Default alert threshold in USD (seeds runtime_settings until changed in-bot)
   check_interval: 10800  # Check interval in seconds (3 hours)
 
 # Server synchronization
