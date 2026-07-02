@@ -5,7 +5,7 @@ aiogram==3.29.0
 httpx==0.28.1
 
 # ICMP Ping
-ping3==4.0.8
+ping3==5.1.5
 
 # Configuration
 python-dotenv==1.2.2
