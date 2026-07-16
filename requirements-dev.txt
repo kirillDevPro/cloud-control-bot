@@ -4,4 +4,4 @@
 # Tool configuration lives in pyproject.toml.
 
 ruff==0.15.20
-mypy==2.1.0
+mypy==2.3.0
