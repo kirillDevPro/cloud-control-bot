@@ -32,9 +32,10 @@
 </p>
 
 A Telegram bot to **monitor, power-manage, and track the cost** of your cloud servers across
-**Vultr**, **Hetzner**, and **AWS**. It watches your instances around the clock via ICMP ping,
-alerts you the moment one goes down (or comes back), lets you start / stop / reboot servers
-straight from chat, and keeps an eye on provider balances and costs.
+**Vultr**, **Hetzner**, and **AWS**. It watches your instances around the clock via ICMP ping
+(plus optional per-server TCP, HTTP, and SSL-certificate checks), alerts you the moment one goes
+down (or comes back), lets you start / stop / reboot servers straight from chat, and keeps an eye
+on provider balances and costs.
 
 Built on [aiogram 3.x](https://docs.aiogram.dev/), with one isolated worker process per
 server, supervised background tasks, and heartbeat-based stall detection for unattended
@@ -55,13 +56,18 @@ server, supervised background tasks, and heartbeat-based stall detection for una
   one crash never takes down the others.
 - **Instant up/down alerts** — delivery-confirmed notifications with per-direction cooldowns and
   debouncing of transient provider failures (alerts only on sustained outages).
+- **Service checks (TCP / HTTP / SSL)** — beyond ICMP ping, configure per-server checks straight
+  from chat with no restart: a TCP port probe, an HTTP(S) endpoint check (status code / body
+  keyword / latency), and SSL-certificate expiry warnings. TCP/HTTP alerts are edge-triggered,
+  SSL-expiry alerts level-triggered; every target is address-validated to prevent false "healthy" reads.
 - **Power management from chat** — start, stop, reboot, and graceful (ACPI) shutdown where the
   provider supports it.
 - **Multilingual UI (EN / RU / UK / ES)** — per-user language selection persisted across restarts;
   even background alerts are rendered in each recipient's own language.
 - **Balance & cost tracking** — prepaid balance for Vultr, monthly costs via AWS Cost Explorer,
   with low-balance threshold alerts.
-- **Statistics** — hourly availability stats and ping-error history persisted in SQLite.
+- **Statistics** — hourly availability stats and ping-error history persisted in SQLite, on a
+  configurable rolling window (30 days by default).
 - **Self-healing** — a supervisor restarts crashed background tasks and reconciles missing
   workers; subsystem health (queue fill, live worker count, manager liveness) is monitored.
 
@@ -89,12 +95,13 @@ main.py (main process)
 |   +-- ping_results_queue   (IPC Queue: results -> main process)
 |   +-- shared_state         (DictProxy: current status sync)
 |
-+-- up to 5 supervised background tasks
++-- up to 6 supervised background tasks
 |   +-- ping_results_processor  reads the queue, writes SQLite, sends notifications
 |   +-- balance_checker         polls balances, alerts below threshold (only if a provider exposes balance)
 |   +-- servers_sync_task       syncs the server list with provider APIs
 |   +-- workers_health_task     monitors + reconciles worker processes
 |   +-- log_cleanup_task        removes rotated logs
+|   +-- service_checks_task     runs per-server TCP/HTTP/SSL checks (main process), writes SQLite, alerts
 |
 +-- supervisor + heartbeat registry
 |   crash -> CRITICAL log + alert + recreate; stale heartbeat -> alert
@@ -113,7 +120,8 @@ src/
 +-- config/          settings (Pydantic), config.yaml, provider auto-discovery
 +-- providers/       BaseProvider + Vultr / Hetzner / AWS, factory, manager, mixins
 +-- monitoring/      PingManager and the per-server ping worker
-+-- background_tasks/ ping processor, balance checker, sync, health, supervisor, heartbeat
++-- checks/          TCP / HTTP / SSL service-check runners + address-validation chokepoint
++-- background_tasks/ ping processor, balance checker, sync, health, service checks, supervisor, heartbeat
 +-- bot/             routers, formatters, keyboards, middlewares, notifications, utils
 +-- storage/         JSON + SQLite repositories (servers, balance, statistics)
 +-- models/          Server, Provider, PingResult, billing models
@@ -215,6 +223,14 @@ balance:
   check_interval: 10800 # balance poll interval (seconds)
 sync:
   servers_interval: 600 # server-list sync interval (seconds)
+stats:
+  retention_days: 30    # rolling statistics window in days (1-365)
+checks:                 # per-server TCP/HTTP/SSL service checks
+  interval: 60          # default TCP/HTTP check interval in seconds (10-3600)
+  tcp_timeout: 5        # TCP connect-check timeout in seconds (1-60)
+  http_timeout: 10      # HTTP endpoint-check timeout in seconds (1-60)
+  ssl_interval: 21600   # SSL expiry-check interval in seconds (3600-86400)
+  ssl_warn_days: 14     # default days-before-expiry to start warning (1-365)
 logging:
   level: INFO           # DEBUG, INFO, WARNING, ERROR, CRITICAL
 ```
@@ -232,6 +248,8 @@ LOG_LEVEL=DEBUG python main.py
 
 In Telegram, open the bot and use `/start`. The main menu exposes **Monitoring**,
 **Management**, and **Balance**. Only the user IDs listed in `ADMIN_IDS` are allowed in.
+Per-server TCP/HTTP/SSL service checks are configured from a server's control screen
+(**Servers → pick a server → Checks**), and apply on the next cycle with no restart.
 
 Runtime data lives in `data/` (server cache, balance history, SQLite statistics, callback
 cache) and logs in `logs/` — both are gitignored and safe to delete to reset state.
