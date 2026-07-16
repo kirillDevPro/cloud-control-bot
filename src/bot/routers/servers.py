@@ -24,10 +24,11 @@ from ..keyboards import (
 from ..utils import (
     safe_edit_message,
     handle_telegram_errors,
-    decode_callback_data,
     apply_shared_status,
     show_screen,
 )
+from ..utils.server_lookup import resolve_server
+from ...storage.service_checks_store import get_checks
 from ..formatters import (
     format_provider_selection,
     format_servers_management_list,
@@ -55,36 +56,6 @@ _cooldown_lock = threading.Lock()
 # live in the worker-shared DictProxy. Keyed by composite_key (not bare id) to
 # avoid cross-account collisions when two providers expose the same server id.
 _operation_cooldowns: dict[str, float] = {}
-
-
-def parse_server_key(callback_data: str, prefix: str = "") -> str | None:
-    """Safely extract the composite server key from callback_data.
-
-    Supports both plain keys and hashed ones (for long AWS keys).
-    Returns the full server_key for use with get_by_composite_key().
-
-    Args:
-        callback_data: Callback data string.
-        prefix: Prefix to strip before decoding.
-
-    Returns:
-        Full server_key (for example, "hetzner_prod:12345") or None on error.
-    """
-    try:
-        # Decode callback_data (handles hashes for long keys)
-        server_key = decode_callback_data(callback_data, prefix)
-        if not server_key:
-            logger.error(f"Failed to decode callback_data: {callback_data}")
-            return None
-
-        if ":" not in server_key:
-            logger.error(f"Invalid server_key format (missing ':'): {server_key}")
-            return None
-
-        return server_key
-    except (ValueError, KeyError, AttributeError) as e:
-        logger.error(f"Failed to parse server_key from '{callback_data}': {e}", exc_info=True)
-        return None
 
 
 def try_acquire_cooldown(server_key: str) -> tuple[bool, int]:
@@ -132,34 +103,6 @@ def clear_operation_cooldown(server_key: str) -> None:
     """
     with _cooldown_lock:
         _operation_cooldowns.pop(server_key, None)
-
-
-async def _resolve_server(
-    callback: CallbackQuery, servers_repo: ServersRepository, prefix: str
-) -> Server | None:
-    """Decode callback_data, validate the key, and look up a server.
-
-    On error it answers the user itself and returns None.
-
-    Args:
-        callback: Callback query carrying encoded server data.
-        servers_repo: Server repository used for the composite-key lookup.
-        prefix: callback_data prefix to strip before decoding.
-
-    Returns:
-        The resolved server, or None if the key is invalid or not found.
-    """
-    server_key = parse_server_key(callback.data, prefix)
-    if not server_key:
-        await callback.answer(_("common.invalid_data_format"))
-        return None
-
-    server = servers_repo.get_by_composite_key(server_key)
-    if not server:
-        await callback.answer(_("common.server_not_found"))
-        return None
-
-    return server
 
 
 async def _fetch_power_status(provider_manager: ProviderManager, server: Server) -> str | None:
@@ -311,7 +254,10 @@ async def _execute_power_action(
             callback,
             text,
             get_server_control_keyboard(
-                server.composite_key, power_status, provider.supports_graceful_shutdown(server.id)
+                server.composite_key,
+                power_status,
+                provider.supports_graceful_shutdown(server.id),
+                check_count=len(get_checks(server.composite_key)),
             ),
         )
     except Exception as e:
@@ -564,7 +510,7 @@ async def callback_server_control(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_control_")
+    server = await resolve_server(callback, servers_repo, "server_control_")
     if not server:
         return
 
@@ -586,7 +532,12 @@ async def callback_server_control(
     await safe_edit_message(
         callback,
         text,
-        get_server_control_keyboard(server.composite_key, power_status, supports_graceful),
+        get_server_control_keyboard(
+            server.composite_key,
+            power_status,
+            supports_graceful,
+            check_count=len(get_checks(server.composite_key)),
+        ),
     )
 
 
@@ -610,7 +561,7 @@ async def callback_server_start(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_start_")
+    server = await resolve_server(callback, servers_repo, "server_start_")
     if not server:
         return
 
@@ -639,7 +590,7 @@ async def callback_server_stop_request(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_stop_")
+    server = await resolve_server(callback, servers_repo, "server_stop_")
     if not server:
         return
 
@@ -663,7 +614,7 @@ async def callback_server_reboot_request(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_reboot_")
+    server = await resolve_server(callback, servers_repo, "server_reboot_")
     if not server:
         return
 
@@ -689,7 +640,7 @@ async def callback_server_shutdown_request(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_shutdown_")
+    server = await resolve_server(callback, servers_repo, "server_shutdown_")
     if not server:
         return
 
@@ -724,7 +675,7 @@ async def callback_server_confirm(
         await callback.answer(_("common.unknown_operation"))
         return
 
-    server = await _resolve_server(callback, servers_repo, prefix)
+    server = await resolve_server(callback, servers_repo, prefix)
     if not server:
         return
 
@@ -770,7 +721,7 @@ async def callback_server_cancel(
         await callback.answer(_("common.unknown_operation"))
         return
 
-    server = await _resolve_server(callback, servers_repo, prefix)
+    server = await resolve_server(callback, servers_repo, prefix)
     if not server:
         return
 
@@ -784,7 +735,12 @@ async def callback_server_cancel(
     await safe_edit_message(
         callback,
         text,
-        get_server_control_keyboard(server.composite_key, power_status, supports_graceful),
+        get_server_control_keyboard(
+            server.composite_key,
+            power_status,
+            supports_graceful,
+            check_count=len(get_checks(server.composite_key)),
+        ),
     )
 
 
@@ -809,7 +765,7 @@ async def callback_server_refresh(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "server_refresh_")
+    server = await resolve_server(callback, servers_repo, "server_refresh_")
     if not server:
         return
 
@@ -831,7 +787,12 @@ async def callback_server_refresh(
     await safe_edit_message(
         callback,
         text,
-        get_server_control_keyboard(server.composite_key, power_status, supports_graceful),
+        get_server_control_keyboard(
+            server.composite_key,
+            power_status,
+            supports_graceful,
+            check_count=len(get_checks(server.composite_key)),
+        ),
     )
 
 

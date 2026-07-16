@@ -41,6 +41,18 @@ balance:
 sync:
   servers_interval: 600  # Sync interval in seconds (10 minutes)
 
+# Statistics
+stats:
+  retention_days: 30     # Rolling statistics retention window in days (1-365)
+
+# Service checks (TCP / HTTP / SSL health checks beyond ICMP ping)
+checks:
+  interval: 60           # Default TCP/HTTP check interval in seconds (10-3600)
+  tcp_timeout: 5         # TCP connect-check timeout in seconds (1-60)
+  http_timeout: 10       # HTTP endpoint-check timeout in seconds (1-60)
+  ssl_interval: 21600    # SSL expiry-check interval in seconds (3600-86400)
+  ssl_warn_days: 14      # Default days-before-expiry to start warning (1-365)
+
 # Logging
 logging:
   level: INFO            # DEBUG, INFO, WARNING, ERROR, CRITICAL

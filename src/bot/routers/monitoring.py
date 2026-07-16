@@ -6,7 +6,6 @@ from multiprocessing.managers import DictProxy
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 
-from ...models import Server
 from ...storage import ServersRepository, SqliteStatisticsRepository
 from ...storage.balance import BalanceRepository
 from ...providers.manager import ProviderManager
@@ -20,10 +19,10 @@ from ..keyboards import (
 from ..utils import (
     safe_edit_message,
     handle_telegram_errors,
-    decode_callback_data,
     apply_shared_status,
     show_screen,
 )
+from ..utils.server_lookup import resolve_server
 from ..formatters import (
     format_monitoring_dashboard,
     format_servers_list,
@@ -36,35 +35,6 @@ logger = logging.getLogger(__name__)
 # Create the router for monitoring
 monitoring_router = Router(name="monitoring")
 
-
-async def _resolve_server(
-    callback: CallbackQuery, servers_repo: ServersRepository, prefix: str
-) -> Server | None:
-    """Decode callback_data, validate the composite key, and look up a server.
-
-    On error, answers the user directly (and logs it) and returns None.
-
-    Args:
-        callback: Callback query carrying encoded server data.
-        servers_repo: Server repository used for the composite-key lookup.
-        prefix: callback_data prefix to strip before decoding.
-
-    Returns:
-        The resolved server, or None if the key is invalid or the server is not
-        found.
-    """
-    server_key = decode_callback_data(callback.data, prefix)
-    if not server_key or ":" not in server_key:
-        await callback.answer(_("common.invalid_data_format"))
-        logger.error(f"Invalid callback_data: {callback.data}")
-        return None
-
-    server = servers_repo.get_by_composite_key(server_key)
-    if not server:
-        await callback.answer(_("common.server_not_found"))
-        return None
-
-    return server
 
 
 @monitoring_router.message(MainMenuButton("menu.monitoring"))
@@ -207,7 +177,7 @@ async def callback_monitor_details(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "monitor_details_")
+    server = await resolve_server(callback, servers_repo, "monitor_details_")
     if not server:
         return
 
@@ -246,7 +216,7 @@ async def callback_monitor_stats(
     Returns:
         None.
     """
-    server = await _resolve_server(callback, servers_repo, "monitor_stats_")
+    server = await resolve_server(callback, servers_repo, "monitor_stats_")
     if not server:
         return
 

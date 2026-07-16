@@ -30,6 +30,7 @@ from src.background_tasks import (
     balance_checker,
     ping_results_processor,
     servers_sync_task,
+    service_checks_task,
     workers_health_task,
 )
 from src.background_tasks.heartbeat import HeartbeatRegistry
@@ -38,6 +39,7 @@ from src.config import get_settings
 from src.container import ApplicationContainer, ContainerBuilder
 from src.models import Server
 from src.storage.runtime_settings import are_balance_alerts_enabled, get_balance_threshold
+from src.storage.service_checks_store import get_all_checks
 from src.utils.log_cleaner import log_cleanup_task
 from src.utils.logger import configure_third_party_loggers, setup_main_logger
 
@@ -268,6 +270,27 @@ async def start_background_tasks(
         ),
     )
 
+    # 6. Service checks (TCP/HTTP/SSL beyond ICMP). NOT critical: a failure here must never
+    #    abort startup — ICMP monitoring, the core product, is unaffected. Reads the
+    #    per-server check config live via get_all_checks (no restart needed on a chat edit).
+    _start(
+        "service_checks",
+        lambda: service_checks_task(
+            bot=app.bot,
+            servers_repo=app.servers_repo,
+            stats_repo=app.stats_repo,
+            http_client=app.http_client,
+            admin_ids=app.admin_ids,
+            check_interval=app.settings.SERVICE_CHECK_INTERVAL,
+            ssl_interval=app.settings.SSL_CHECK_INTERVAL,
+            ssl_warn_days=app.settings.SSL_EXPIRY_WARN_DAYS,
+            tcp_timeout=app.settings.TCP_CHECK_TIMEOUT,
+            http_timeout=app.settings.HTTP_CHECK_TIMEOUT,
+            checks_getter=get_all_checks,
+            heartbeat=heartbeats.bound_beat("service_checks"),
+        ),
+    )
+
     logger.info(f"Started {len(tasks)} background tasks: {', '.join(tasks)}")
     return tasks, factories
 
@@ -436,6 +459,9 @@ async def main() -> None:
         "servers_sync": 2 * container.settings.SERVERS_SYNC_INTERVAL + 300.0,
         "balance_checker": 2 * container.settings.BALANCE_CHECK_INTERVAL + 600.0,
         "log_cleanup": 2 * 24 * 3600.0,
+        # service_checks beats at each cycle top AND per completed check, so even an
+        # all-idle cycle beats every SERVICE_CHECK_INTERVAL; 2x that plus slack.
+        "service_checks": 2 * container.settings.SERVICE_CHECK_INTERVAL + 300.0,
     }
 
     # Supervisor: detects any background task that exits unexpectedly (a crash, not a

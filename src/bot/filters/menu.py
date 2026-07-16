@@ -17,6 +17,15 @@ from aiogram.types import Message
 
 from ..i18n import menu_variants
 
+# Every localized label of the main-menu reply buttons, resolved once at import. An FSM input
+# handler compares an incoming message against this set to detect a main-menu tap and cancel
+# the modal cleanly instead of swallowing the tap as wizard input.
+MAIN_MENU_LABELS: frozenset[str] = frozenset(
+    label
+    for key in ("menu.monitoring", "menu.servers", "menu.balance", "menu.settings")
+    for label in menu_variants(key)
+)
+
 
 class MainMenuButton(BaseFilter):
     """Match a Message whose text equals a menu key's label in any language."""

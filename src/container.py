@@ -15,6 +15,7 @@ from multiprocessing import Queue
 from multiprocessing.managers import DictProxy
 from typing import TYPE_CHECKING
 
+import httpx
 from aiogram import Bot, Dispatcher
 
 if TYPE_CHECKING:
@@ -41,6 +42,8 @@ class ApplicationContainer:
         balance_repo: Balance history repository.
         provider_manager: Provider manager.
         ping_manager: Ping monitoring manager.
+        http_client: Shared httpx client for HTTP service checks (owned here so a
+            supervisor restart of the checks task reuses one pool instead of leaking one).
         bot: Telegram bot.
         dispatcher: aiogram dispatcher.
     """
@@ -51,6 +54,7 @@ class ApplicationContainer:
     balance_repo: "BalanceRepository"
     provider_manager: "ProviderManager"
     ping_manager: "PingManager"
+    http_client: httpx.AsyncClient
     bot: Bot
     dispatcher: Dispatcher
 
@@ -88,8 +92,9 @@ class ApplicationContainer:
         Order:
         1. Worker processes (PingManager)
         2. Providers (HTTP sessions)
-        3. Bot (Telegram session)
-        4. Statistics DB connection (SQLite)
+        3. Shared service-check HTTP client
+        4. Bot (Telegram session)
+        5. Statistics DB connection (SQLite)
 
         Returns:
             None.
@@ -112,7 +117,15 @@ class ApplicationContainer:
             except Exception as e:
                 logger.error(f"Error closing providers: {e}", exc_info=True)
 
-        # 3. Close the bot session
+        # 3. Close the shared service-check HTTP client
+        if self.http_client:
+            try:
+                await self.http_client.aclose()
+                logger.debug("Service-check HTTP client closed")
+            except Exception as e:
+                logger.error(f"Error closing service-check HTTP client: {e}", exc_info=True)
+
+        # 4. Close the bot session
         if self.bot:
             try:
                 await self.bot.session.close()
@@ -120,7 +133,7 @@ class ApplicationContainer:
             except Exception as e:
                 logger.error(f"Error closing bot session: {e}", exc_info=True)
 
-        # 4. Close the statistics DB connection (the final batch flush already ran
+        # 5. Close the statistics DB connection (the final batch flush already ran
         #    during background-task cancellation, before container shutdown)
         if self.stats_repo:
             try:
@@ -141,10 +154,11 @@ class ContainerBuilder:
         Build and initialize all application components.
 
         Initialization order:
-        1. Repositories (ServersRepository, SqliteStatisticsRepository, BalanceRepository)
-        2. ProviderManager + Providers
-        3. PingManager
-        4. Bot + Dispatcher
+        1. Repositories and the callback/language/runtime/check-config stores
+        2. Shared HTTP service-check client
+        3. ProviderManager + Providers
+        4. PingManager
+        5. Bot + Dispatcher
 
         Args:
             settings: Loaded configuration.
@@ -163,7 +177,10 @@ class ContainerBuilder:
         # 1. Repositories
         logger.debug("Initializing repositories...")
         servers_repo = ServersRepository(settings.get_servers_file())
-        stats_repo = SqliteStatisticsRepository(settings.DATA_DIR / "statistics.db")
+        stats_repo = SqliteStatisticsRepository(
+            settings.get_statistics_db_file(),
+            retention_days=settings.STATS_RETENTION_DAYS,
+        )
         balance_repo = BalanceRepository(settings.get_balance_history_file())
 
         # Point the callback-data cache DB at the configured data dir (and init it)
@@ -189,6 +206,23 @@ class ContainerBuilder:
             default_threshold=settings.BALANCE_THRESHOLD,
         )
 
+        # Load per-server service-check definitions (TCP/HTTP/SSL checks the admin
+        # configures from chat), read each cycle by the service_checks background task.
+        from .storage.service_checks_store import init_service_checks_store
+
+        init_service_checks_store(settings.get_service_checks_file())
+
+        # Shared HTTP client for service checks (HTTP endpoint checks). Owned by the
+        # container so a supervisor restart of the checks task reuses this pool rather
+        # than leaking one per restart; per-request timeouts are set at each check.
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            # Default OFF to match the check layer's invariant: every HTTP check follows
+            # redirects MANUALLY (revalidating each hop's host through resolve_target), so the
+            # shared client must never silently auto-follow a redirect into a rejected address.
+            follow_redirects=False,
+        )
+
         # 2. Providers
         logger.debug("Initializing providers...")
         provider_manager = ProviderManager()
@@ -212,6 +246,7 @@ class ContainerBuilder:
             balance_repo=balance_repo,
             provider_manager=provider_manager,
             ping_manager=ping_manager,
+            http_client=http_client,
             bot=bot,
             dispatcher=dispatcher,
         )

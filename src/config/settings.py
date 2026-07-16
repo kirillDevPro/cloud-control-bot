@@ -69,6 +69,14 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
             "BALANCE_CHECK_INTERVAL": ("balance", "check_interval"),
             # Synchronization
             "SERVERS_SYNC_INTERVAL": ("sync", "servers_interval"),
+            # Statistics
+            "STATS_RETENTION_DAYS": ("stats", "retention_days"),
+            # Service checks
+            "SERVICE_CHECK_INTERVAL": ("checks", "interval"),
+            "TCP_CHECK_TIMEOUT": ("checks", "tcp_timeout"),
+            "HTTP_CHECK_TIMEOUT": ("checks", "http_timeout"),
+            "SSL_CHECK_INTERVAL": ("checks", "ssl_interval"),
+            "SSL_EXPIRY_WARN_DAYS": ("checks", "ssl_warn_days"),
             # Logging
             "LOG_LEVEL": ("logging", "level"),
             # Paths
@@ -174,6 +182,44 @@ class Settings(BaseSettings):
         description="Server synchronization interval with provider APIs in seconds",
         ge=300,  # minimum 5 minutes
         le=86400,  # maximum 24 hours
+    )
+
+    # Statistics
+    STATS_RETENTION_DAYS: int = Field(
+        default=30,
+        description="Rolling statistics retention window in days",
+        ge=1,  # minimum 1 day
+        le=365,  # maximum 1 year
+    )
+
+    # Service checks (TCP / HTTP / SSL health checks beyond ICMP ping)
+    SERVICE_CHECK_INTERVAL: int = Field(
+        default=60,
+        description="Default TCP/HTTP service-check interval in seconds",
+        ge=10,
+        le=3600,
+    )
+
+    TCP_CHECK_TIMEOUT: int = Field(
+        default=5, description="TCP connect-check timeout in seconds", ge=1, le=60
+    )
+
+    HTTP_CHECK_TIMEOUT: int = Field(
+        default=10, description="HTTP endpoint-check timeout in seconds", ge=1, le=60
+    )
+
+    SSL_CHECK_INTERVAL: int = Field(
+        default=21600,  # 6 hours — certificates rotate on the order of months
+        description="SSL certificate-expiry check interval in seconds",
+        ge=3600,  # minimum 1 hour
+        le=86400,  # maximum 24 hours
+    )
+
+    SSL_EXPIRY_WARN_DAYS: int = Field(
+        default=14,
+        description="Default days-before-expiry to start warning about a certificate",
+        ge=1,
+        le=365,
     )
 
     # Logging
@@ -433,6 +479,22 @@ class Settings(BaseSettings):
             Path: DATA_DIR joined with "runtime_settings.json".
         """
         return self.DATA_DIR / "runtime_settings.json"
+
+    def get_statistics_db_file(self) -> Path:
+        """Return the path to the statistics.db SQLite file.
+
+        Returns:
+            Path: DATA_DIR joined with "statistics.db".
+        """
+        return self.DATA_DIR / "statistics.db"
+
+    def get_service_checks_file(self) -> Path:
+        """Return the path to the service_checks.json file.
+
+        Returns:
+            Path: DATA_DIR joined with "service_checks.json".
+        """
+        return self.DATA_DIR / "service_checks.json"
 
 
 # === SINGLETON ===

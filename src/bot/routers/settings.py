@@ -19,12 +19,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from ..filters import MainMenuButton
+from ..filters.menu import MAIN_MENU_LABELS, MainMenuButton
 from ..i18n import (
     _,
     LANGUAGE_NAMES,
     SUPPORTED_LANGUAGES,
-    menu_variants,
     set_current_language,
     set_user_language,
 )
@@ -62,16 +61,6 @@ class BalanceThresholdForm(StatesGroup):
     """FSM states for the optional custom low-balance threshold text input."""
 
     waiting_for_value = State()
-
-
-# Localized labels of every main-menu reply button across all languages. Used to
-# detect a menu tap during custom-threshold input so the modal flow cancels cleanly
-# instead of swallowing the tap.
-_MAIN_MENU_LABELS: frozenset[str] = frozenset(
-    label
-    for key in ("menu.monitoring", "menu.servers", "menu.balance", "menu.settings")
-    for label in menu_variants(key)
-)
 
 
 def _menu_text() -> str:
@@ -163,7 +152,7 @@ async def on_custom_threshold_input(message: Message, state: FSMContext) -> None
         None.
     """
     # A main-menu button tap leaves the modal cleanly instead of being eaten.
-    if message.text in _MAIN_MENU_LABELS:
+    if message.text in MAIN_MENU_LABELS:
         await state.clear()
         await show_screen(message, _("settings.balance_cancelled"), get_main_menu_keyboard())
         return

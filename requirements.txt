@@ -16,6 +16,9 @@ pyyaml==6.0.3
 # Time-zone handling
 pytz==2026.2
 
+# X.509 certificate parsing for SSL-expiry checks (tz-aware not_valid_after_utc)
+cryptography==49.0.0
+
 # AWS SDK
 boto3==1.43.40
 boto3-stubs[ec2,lightsail,ce]==1.43.39

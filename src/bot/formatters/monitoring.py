@@ -326,9 +326,12 @@ def format_server_details(
                 elif time_diff.total_seconds() < 3600:
                     minutes = int(time_diff.total_seconds() / 60)
                     time_ago = _("time.min_ago", n=minutes)
-                else:
+                elif time_diff.total_seconds() < 86400:
                     hours = int(time_diff.total_seconds() / 3600)
                     time_ago = _("time.hours_ago", n=hours)
+                else:
+                    days = int(time_diff.total_seconds() / 86400)
+                    time_ago = _("time.days_ago", n=days)
             except Exception as e:
                 logger.warning(f"Failed to calculate time diff for error: {e}")
                 time_ago = _("time.na")

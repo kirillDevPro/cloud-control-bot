@@ -3,12 +3,14 @@
 import sqlite3
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
 from ..exceptions import DatabaseError
 from ..models.ping_result import PingResult, PingStatistics, PingStatus
+from ..models.service_check import CheckStatus, ServiceCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -18,21 +20,31 @@ class SqliteStatisticsRepository:
 
     Rows are scoped by provider alias plus server ID so multi-account providers with the
     same bare server IDs never share statistics. The repository uses one cached SQLite
-    connection protected by _db_lock, checkpoints WAL on close, and rebuilds the
-    disposable rolling-window database only on confirmed SQLite file corruption.
+    connection protected by _db_lock, checkpoints WAL on close, and recreates the
+    database only on confirmed SQLite file corruption. The retention window is
+    configurable (default 30 days); at that size a rebuild is a real loss of history, so
+    the rebuild trigger stays narrowly gated on a genuinely malformed file.
     """
 
     MAX_ERRORS_PER_SERVER = 100
-    RETENTION_HOURS = 24
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, retention_days: int = 30):
         """
         Initialize the repository.
 
         Args:
             db_path: Path to the SQLite database file.
+            retention_days: Rolling window in days after which aggregates and error
+                rows are pruned. Must be positive.
         """
         self.db_path = db_path
+        self._retention_hours = max(1, retention_days) * 24
+        # Monotonic-clock time of the last prune per SUBSYSTEM, so each prune runs at
+        # most once per hour independent of how many batches call it, and so a service-check
+        # write never prunes — or rolls back on a failure pruning — the legacy ping tables and
+        # vice-versa: each writer prunes ONLY its own tables (the parallel-table boundary).
+        self._last_ping_prune_monotonic: float = 0.0
+        self._last_check_prune_monotonic: float = 0.0
         self._connection: sqlite3.Connection | None = None
         # Guards lazy creation/close of the cached connection.
         self._connection_lock = threading.Lock()
@@ -42,8 +54,9 @@ class SqliteStatisticsRepository:
         # for concurrent use. Distinct from _connection_lock to avoid re-entrancy.
         self._db_lock = threading.Lock()
         # Create the DB/tables and verify integrity; an unclean shutdown can leave a
-        # WAL-mode DB malformed, so rebuild the (disposable, 24h-window) DB on corruption
-        # rather than fail every write forever.
+        # WAL-mode DB malformed, so recreate the DB on confirmed corruption rather than
+        # fail every write forever. At a 30-day window this discards real history, so
+        # the trigger is gated on a genuinely malformed file (see _is_corruption_error).
         self._init_database()
 
     def _get_or_create_connection(self) -> sqlite3.Connection:
@@ -173,9 +186,10 @@ class SqliteStatisticsRepository:
 
         After an unclean shutdown a WAL-mode SQLite file can be left malformed, after which
         every write fails forever (throttled only by the emergency batch clear) with no
-        signal. The statistics DB holds only a rolling 24h window, so on confirmed corruption
-        it is safe to delete and recreate. A transient/operational error (locked, permission)
-        does NOT trigger the rebuild.
+        signal. Recreating the DB is the only way to recover writes, so on a CONFIRMED
+        malformed file it is deleted and recreated even though that discards the retention
+        window of history. A transient/operational error (locked, permission) does NOT
+        trigger the rebuild.
         """
         try:
             with self._db_lock, self._get_connection() as conn:
@@ -279,6 +293,87 @@ class SqliteStatisticsRepository:
                     ON ping_errors(server_id, provider_type, timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_ping_errors_timestamp
                     ON ping_errors(timestamp);
+
+                -- ============================================================
+                -- SERVICE CHECKS (TCP / HTTP / SSL) — PARALLEL tables.
+                -- Deliberately separate from hourly_stats/ping_errors: there is no
+                -- migration machinery here (schema is CREATE TABLE IF NOT EXISTS), so
+                -- ALTERing a live table would diverge prod from dev invisibly and the
+                -- first INSERT naming a missing column would re-queue and drop stats for
+                -- every server. New tables are free; altering the old ones is not. New
+                -- tables use the accurate 'provider_alias' column name (the ping tables'
+                -- 'provider_type' actually holds an alias — a misnomer not copied here).
+                -- ============================================================
+
+                -- Hourly-aggregated service-check statistics, one row per check per hour.
+                CREATE TABLE IF NOT EXISTS check_hourly_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id TEXT NOT NULL,
+                    provider_alias TEXT NOT NULL,
+                    check_id TEXT NOT NULL,
+                    hour_timestamp INTEGER NOT NULL,
+
+                    total_checks INTEGER NOT NULL DEFAULT 0,
+                    successful_checks INTEGER NOT NULL DEFAULT 0,
+                    failed_checks INTEGER NOT NULL DEFAULT 0,
+                    timeout_checks INTEGER NOT NULL DEFAULT 0,
+
+                    total_latency_ms REAL DEFAULT 0.0,
+                    min_latency_ms REAL,
+                    max_latency_ms REAL,
+
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+
+                    -- One hour per check of a specific server+provider.
+                    UNIQUE(server_id, provider_alias, check_id, hour_timestamp)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_check_hourly_stats_lookup
+                    ON check_hourly_stats(server_id, provider_alias, check_id, hour_timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_check_hourly_stats_timestamp
+                    ON check_hourly_stats(hour_timestamp);
+
+                -- Recent service-check errors. NOTE: status has NO CHECK constraint on
+                -- purpose — service checks produce statuses ping_errors never will
+                -- (assert_failed, cert_expiring, cert_invalid), SQLite cannot ALTER a
+                -- CHECK constraint, and the ping_errors CHECK(status IN ...) is exactly
+                -- what forecloses reusing that table. Do NOT add one back here.
+                CREATE TABLE IF NOT EXISTS check_errors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id TEXT NOT NULL,
+                    provider_alias TEXT NOT NULL,
+                    check_id TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+
+                    status TEXT NOT NULL,
+                    error TEXT,
+
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_check_errors_lookup
+                    ON check_errors(server_id, provider_alias, check_id, timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_check_errors_timestamp
+                    ON check_errors(timestamp);
+
+                -- Current SSL-certificate state: one row per SSL check (upserted), NOT an
+                -- hourly aggregate — 'days until expiry' is a point-in-time scalar, not a
+                -- rate to sum over an hour. Deliberately NOT pruned by the retention
+                -- window (pruning it would blank the SSL card).
+                CREATE TABLE IF NOT EXISTS check_ssl_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id TEXT NOT NULL,
+                    provider_alias TEXT NOT NULL,
+                    check_id TEXT NOT NULL,
+                    checked_at INTEGER NOT NULL,
+                    not_after_ts INTEGER,
+                    days_left INTEGER,
+                    status TEXT NOT NULL,
+                    verify_error TEXT,
+
+                    UNIQUE(server_id, provider_alias, check_id)
+                );
             """
             )
 
@@ -313,8 +408,8 @@ class SqliteStatisticsRepository:
                     if result.status in (PingStatus.FAILED, PingStatus.TIMEOUT):
                         self._add_error(conn, result)
 
-                # Prune old data
-                self._cleanup_old_data(conn)
+                # Prune old ping data (only — the check tables have their own prune)
+                self._cleanup_ping_data(conn)
 
         except sqlite3.Error as e:
             logger.error(f"Failed to save batch: {e}", exc_info=True)
@@ -518,6 +613,251 @@ class SqliteStatisticsRepository:
             (server_id, provider_type, self.MAX_ERRORS_PER_SERVER),
         )
 
+    # === SERVICE-CHECK BATCHING ===
+
+    # Statuses that count as reachable/healthy for the hourly aggregates (CERT_EXPIRING is
+    # a warning, not a failure — the endpoint is reachable and the cert is valid).
+    _CHECK_SUCCESS_STATUSES = (CheckStatus.OK, CheckStatus.CERT_EXPIRING)
+    # Non-OK statuses recorded as error rows (CERT_EXPIRING is surfaced via the SSL-state
+    # table + its level-triggered alert, not as an error row).
+    _CHECK_ERROR_STATUSES = (
+        CheckStatus.FAILED,
+        CheckStatus.TIMEOUT,
+        CheckStatus.ASSERT_FAILED,
+        CheckStatus.CERT_INVALID,
+    )
+
+    def add_check_batch(self, results: list[ServiceCheckResult]) -> None:
+        """
+        Add a batch of service-check results.
+
+        Mirrors add_ping_batch: the whole batch is written in ONE transaction (rolled back
+        wholesale on error) so a caller-side re-queue on failure cannot double-count. SSL
+        results additionally upsert the current-state table. Afterwards it runs the
+        independently time-gated service-check prune; ping tables are never touched here.
+
+        Args:
+            results: List of service-check results to persist.
+
+        Returns:
+            None.
+
+        Raises:
+            DatabaseError: If the batch could not be written to SQLite.
+        """
+        if not results:
+            return
+
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                for result in results:
+                    hour_ts = self._get_hour_timestamp(result.timestamp)
+                    self._update_check_hourly_stats(conn, result, hour_ts)
+                    if result.status in self._CHECK_ERROR_STATUSES:
+                        self._add_check_error(conn, result)
+                    if result.days_until_expiry is not None or result.not_after is not None:
+                        self._upsert_ssl_state(conn, result)
+
+                # Prune old check data (only — the ping tables have their own prune)
+                self._cleanup_check_data(conn)
+
+        except sqlite3.Error as e:
+            logger.error(f"Failed to save check batch: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to save the service-check batch: {e}") from e
+
+    def _update_check_hourly_stats(
+        self, conn: sqlite3.Connection, result: ServiceCheckResult, hour_ts: int
+    ) -> None:
+        """
+        Fold one service-check result into its hourly aggregate row.
+
+        Inserts a new row for the check's hour bucket or updates the existing one,
+        incrementing the per-status counters and (for successful checks) the latency
+        totals. Mirrors _update_hourly_stats for the ping path.
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+            result: The service-check result to fold in.
+            hour_ts: Unix timestamp of the start of the result's hour bucket.
+
+        Returns:
+            None.
+        """
+        is_success = result.status in self._CHECK_SUCCESS_STATUSES
+        is_timeout = result.status == CheckStatus.TIMEOUT
+        is_failed = not is_success and not is_timeout
+        has_latency = is_success and result.latency_ms is not None
+
+        row = conn.execute(
+            """
+            SELECT total_checks, successful_checks, failed_checks, timeout_checks,
+                   total_latency_ms, min_latency_ms, max_latency_ms
+            FROM check_hourly_stats
+            WHERE server_id = ? AND provider_alias = ? AND check_id = ? AND hour_timestamp = ?
+            """,
+            (result.server_id, result.provider_alias, result.check_id, hour_ts),
+        ).fetchone()
+
+        now_ts = int(datetime.now().timestamp())
+
+        if row:
+            total = row["total_checks"] + 1
+            successful = row["successful_checks"] + (1 if is_success else 0)
+            failed = row["failed_checks"] + (1 if is_failed else 0)
+            timeout = row["timeout_checks"] + (1 if is_timeout else 0)
+            if has_latency:
+                total_latency = row["total_latency_ms"] + result.latency_ms
+                min_latency = (
+                    min(row["min_latency_ms"], result.latency_ms)
+                    if row["min_latency_ms"] is not None
+                    else result.latency_ms
+                )
+                max_latency = (
+                    max(row["max_latency_ms"], result.latency_ms)
+                    if row["max_latency_ms"] is not None
+                    else result.latency_ms
+                )
+            else:
+                total_latency = row["total_latency_ms"]
+                min_latency = row["min_latency_ms"]
+                max_latency = row["max_latency_ms"]
+
+            conn.execute(
+                """
+                UPDATE check_hourly_stats
+                SET total_checks = ?, successful_checks = ?, failed_checks = ?,
+                    timeout_checks = ?, total_latency_ms = ?, min_latency_ms = ?,
+                    max_latency_ms = ?, updated_at = ?
+                WHERE server_id = ? AND provider_alias = ? AND check_id = ? AND hour_timestamp = ?
+                """,
+                (
+                    total, successful, failed, timeout,
+                    total_latency, min_latency, max_latency, now_ts,
+                    result.server_id, result.provider_alias, result.check_id, hour_ts,
+                ),
+            )
+        else:
+            latency = result.latency_ms if has_latency else None
+            conn.execute(
+                """
+                INSERT INTO check_hourly_stats (
+                    server_id, provider_alias, check_id, hour_timestamp,
+                    total_checks, successful_checks, failed_checks, timeout_checks,
+                    total_latency_ms, min_latency_ms, max_latency_ms, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.server_id, result.provider_alias, result.check_id, hour_ts,
+                    1,
+                    1 if is_success else 0,
+                    1 if is_failed else 0,
+                    1 if is_timeout else 0,
+                    latency if latency is not None else 0.0,
+                    latency,
+                    latency,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+
+    def _add_check_error(self, conn: sqlite3.Connection, result: ServiceCheckResult) -> None:
+        """
+        Insert a failed service-check into check_errors and trim per (server, check).
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+            result: The failed service-check result to record.
+
+        Returns:
+            None.
+        """
+        conn.execute(
+            """
+            INSERT INTO check_errors
+                (server_id, provider_alias, check_id, timestamp, status, error, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                result.server_id,
+                result.provider_alias,
+                result.check_id,
+                int(result.timestamp.timestamp()),
+                result.status.value,
+                result.error,
+                int(datetime.now().timestamp()),
+            ),
+        )
+        self._limit_check_errors(conn, result.server_id, result.provider_alias, result.check_id)
+
+    def _limit_check_errors(
+        self, conn: sqlite3.Connection, server_id: str, provider_alias: str, check_id: str
+    ) -> None:
+        """
+        Trim a single check's error rows to MAX_ERRORS_PER_SERVER.
+
+        Partitioned by check_id as well as server/provider, so a noisy HTTP check failing
+        every cycle cannot evict a quiet TCP check's error history (each check keeps its
+        own budget).
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+            server_id: The server whose check errors are trimmed.
+            provider_alias: The provider alias scoping the rows.
+            check_id: The specific check whose rows are trimmed.
+
+        Returns:
+            None.
+        """
+        conn.execute(
+            """
+            DELETE FROM check_errors
+            WHERE id IN (
+                SELECT id FROM check_errors
+                WHERE server_id = ? AND provider_alias = ? AND check_id = ?
+                ORDER BY timestamp DESC
+                LIMIT -1 OFFSET ?
+            )
+            """,
+            (server_id, provider_alias, check_id, self.MAX_ERRORS_PER_SERVER),
+        )
+
+    def _upsert_ssl_state(self, conn: sqlite3.Connection, result: ServiceCheckResult) -> None:
+        """
+        Upsert the current SSL-certificate state for a check (one row per check).
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+            result: An SSL service-check result carrying expiry/validity fields.
+
+        Returns:
+            None.
+        """
+        not_after_ts = int(result.not_after.timestamp()) if result.not_after is not None else None
+        conn.execute(
+            """
+            INSERT INTO check_ssl_state
+                (server_id, provider_alias, check_id, checked_at, not_after_ts,
+                 days_left, status, verify_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(server_id, provider_alias, check_id) DO UPDATE SET
+                checked_at = excluded.checked_at,
+                not_after_ts = excluded.not_after_ts,
+                days_left = excluded.days_left,
+                status = excluded.status,
+                verify_error = excluded.verify_error
+            """,
+            (
+                result.server_id,
+                result.provider_alias,
+                result.check_id,
+                int(result.timestamp.timestamp()),
+                not_after_ts,
+                result.days_until_expiry,
+                result.status.value,
+                result.error,
+            ),
+        )
+
     # === READING AGGREGATES ===
 
     def get_recent_statistics(
@@ -580,8 +920,12 @@ class SqliteStatisticsRepository:
                 avg_response = (total_response / successful) if successful > 0 else 0.0
                 uptime = (successful / total * 100.0) if total > 0 else 100.0
 
-                # Get the most recent downtime from the error rows
-                last_downtime = self._get_last_downtime(conn, server_id, provider_type)
+                # Get the most recent downtime from the error rows, bounded to the SAME
+                # window as the aggregates so a stale error outside the window is not
+                # reported as this window's last downtime.
+                last_downtime = self._get_last_downtime(
+                    conn, server_id, provider_type, hours
+                )
 
                 return PingStatistics(
                     server_id=server_id,
@@ -613,28 +957,34 @@ class SqliteStatisticsRepository:
             )
 
     def _get_last_downtime(
-        self, conn: sqlite3.Connection, server_id: str, provider_type: str
+        self, conn: sqlite3.Connection, server_id: str, provider_type: str, hours: int
     ) -> datetime | None:
         """
-        Get the timestamp of the most recent downtime from the error rows.
+        Get the timestamp of the most recent downtime WITHIN the given window.
+
+        The window bound is required: without it, at a 30-day retention this returns an
+        outage from days ago and stamps it onto a "1h" statistics card. The prune used
+        to bound this implicitly at 24h; it no longer does.
 
         Args:
             conn: Active SQLite connection.
             server_id: ID of the server.
             provider_type: Provider alias scoping the lookup.
+            hours: Size of the look-back window in hours (the caller's window).
 
         Returns:
-            datetime | None: UTC timestamp of the latest recorded error, or
-            None if the server has no error rows.
+            datetime | None: UTC timestamp of the latest error inside the window, or
+            None if the server has no error rows in it.
         """
+        cutoff_ts = int((datetime.now() - timedelta(hours=hours)).timestamp())
         row = conn.execute(
             """
             SELECT timestamp FROM ping_errors
-            WHERE server_id = ? AND provider_type = ?
+            WHERE server_id = ? AND provider_type = ? AND timestamp >= ?
             ORDER BY timestamp DESC
             LIMIT 1
             """,
-            (server_id, provider_type),
+            (server_id, provider_type, cutoff_ts),
         ).fetchone()
 
         if row:
@@ -642,31 +992,38 @@ class SqliteStatisticsRepository:
         return None
 
     def get_recent_errors(
-        self, server_id: str, provider_type: str, limit: int = 100
+        self, server_id: str, provider_type: str, limit: int = 100, hours: int | None = None
     ) -> list[PingResult]:
         """
-        Get the most recent errors for a server.
+        Get the most recent errors for a server within the retention window.
 
-        On SQLite error, returns an empty list instead of raising.
+        The time bound keeps "recent problems" recent: without it, at a 30-day retention
+        errors from weeks ago surface as current. The prune used to bound this implicitly
+        at 24h; it no longer does. On SQLite error, returns an empty list instead of raising.
 
         Args:
             server_id: ID of the server.
             provider_type: Provider alias scoping the rows.
             limit: Maximum number of rows to return.
+            hours: Only return errors newer than this many hours. None (the default) uses the
+                configured retention window, so existing callers see every retained error even
+                when retention is raised above 30 days.
 
         Returns:
             list[PingResult]: Errors ordered from newest to oldest.
         """
+        window_hours = self._retention_hours if hours is None else hours
+        cutoff_ts = int((datetime.now() - timedelta(hours=window_hours)).timestamp())
         try:
             with self._db_lock, self._get_connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT * FROM ping_errors
-                    WHERE server_id = ? AND provider_type = ?
+                    WHERE server_id = ? AND provider_type = ? AND timestamp >= ?
                     ORDER BY timestamp DESC
                     LIMIT ?
                     """,
-                    (server_id, provider_type, limit),
+                    (server_id, provider_type, cutoff_ts, limit),
                 ).fetchall()
 
                 results = []
@@ -708,22 +1065,203 @@ class SqliteStatisticsRepository:
             logger.error(f"Failed to get errors for {server_id}: {e}", exc_info=True)
             return []
 
+    # === READING SERVICE-CHECK AGGREGATES ===
+
+    def get_check_statistics(
+        self, server_id: str, provider_alias: str, hours: int = 24
+    ) -> dict[str, dict]:
+        """
+        Aggregate service-check statistics per check over a recent window.
+
+        Uses ONE GROUP BY query rather than a per-check loop, so rendering a server's
+        checks does not multiply the dashboard's per-server query count (and its _db_lock
+        contention with the batch writer) by the number of checks. On SQLite error,
+        returns an empty mapping instead of raising.
+
+        Args:
+            server_id: ID of the server.
+            provider_alias: Provider alias scoping the rows.
+            hours: Size of the look-back window in hours.
+
+        Returns:
+            dict[str, dict]: Mapping of check_id to its aggregates
+                (total/successful/failed/timeout, uptime_percentage, avg/min/max latency).
+        """
+        cutoff_ts = int((datetime.now() - timedelta(hours=hours)).timestamp())
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        check_id,
+                        SUM(total_checks) AS total,
+                        SUM(successful_checks) AS successful,
+                        SUM(failed_checks) AS failed,
+                        SUM(timeout_checks) AS timeout,
+                        SUM(total_latency_ms) AS total_latency,
+                        MIN(min_latency_ms) AS min_latency,
+                        MAX(max_latency_ms) AS max_latency
+                    FROM check_hourly_stats
+                    WHERE server_id = ? AND provider_alias = ? AND hour_timestamp >= ?
+                    GROUP BY check_id
+                    """,
+                    (server_id, provider_alias, cutoff_ts),
+                ).fetchall()
+
+                stats: dict[str, dict] = {}
+                for row in rows:
+                    total = row["total"] or 0
+                    successful = row["successful"] or 0
+                    total_latency = row["total_latency"] or 0.0
+                    stats[row["check_id"]] = {
+                        "total_checks": total,
+                        "successful_checks": successful,
+                        "failed_checks": row["failed"] or 0,
+                        "timeout_checks": row["timeout"] or 0,
+                        "uptime_percentage": (successful / total * 100.0) if total > 0 else 100.0,
+                        "avg_latency_ms": (total_latency / successful) if successful > 0 else 0.0,
+                        "min_latency_ms": row["min_latency"],
+                        "max_latency_ms": row["max_latency"],
+                    }
+                return stats
+
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get check statistics for {server_id}: {e}", exc_info=True)
+            return {}
+
+    def get_ssl_state(
+        self, server_id: str, provider_alias: str, check_id: str
+    ) -> dict | None:
+        """
+        Return the current SSL-certificate state for a check, or None when unknown.
+
+        On SQLite error, returns None instead of raising.
+
+        Args:
+            server_id: ID of the server.
+            provider_alias: Provider alias scoping the row.
+            check_id: The SSL check to read.
+
+        Returns:
+            dict | None: Mapping with checked_at, not_after (datetime|None), days_left,
+                status, verify_error — or None when the check has never run.
+        """
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT checked_at, not_after_ts, days_left, status, verify_error
+                    FROM check_ssl_state
+                    WHERE server_id = ? AND provider_alias = ? AND check_id = ?
+                    """,
+                    (server_id, provider_alias, check_id),
+                ).fetchone()
+
+                if not row:
+                    return None
+                not_after = (
+                    datetime.fromtimestamp(row["not_after_ts"], tz=timezone.utc)
+                    if row["not_after_ts"] is not None
+                    else None
+                )
+                return {
+                    "checked_at": datetime.fromtimestamp(row["checked_at"], tz=timezone.utc),
+                    "not_after": not_after,
+                    "days_left": row["days_left"],
+                    "status": row["status"],
+                    "verify_error": row["verify_error"],
+                }
+
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get SSL state for {server_id}: {e}", exc_info=True)
+            return None
+
+    def delete_check_state(self, server_id: str, provider_alias: str, check_id: str) -> bool:
+        """
+        Delete all stored state for a single check (history + errors + SSL state).
+
+        Called when an admin deletes a check, so its rows do not linger. On SQLite error,
+        returns False instead of raising.
+
+        Args:
+            server_id: ID of the server.
+            provider_alias: Provider alias scoping the rows.
+            check_id: The check whose stored state is removed.
+
+        Returns:
+            bool: True on success, False on SQLite error.
+        """
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                conn.execute(
+                    "DELETE FROM check_hourly_stats "
+                    "WHERE server_id = ? AND provider_alias = ? AND check_id = ?",
+                    (server_id, provider_alias, check_id),
+                )
+                conn.execute(
+                    "DELETE FROM check_errors "
+                    "WHERE server_id = ? AND provider_alias = ? AND check_id = ?",
+                    (server_id, provider_alias, check_id),
+                )
+                conn.execute(
+                    "DELETE FROM check_ssl_state "
+                    "WHERE server_id = ? AND provider_alias = ? AND check_id = ?",
+                    (server_id, provider_alias, check_id),
+                )
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Failed to delete check state for {server_id}: {e}", exc_info=True)
+            return False
+
     # === CLEANUP ===
 
-    def _cleanup_old_data(self, conn: sqlite3.Connection) -> None:
+    def _cleanup_ping_data(self, conn: sqlite3.Connection) -> None:
         """
-        Delete data older than RETENTION_HOURS.
+        Delete ping aggregates/errors older than the retention window, at most once per hour.
+
+        Time-gated (per subsystem) so add_ping_batch's prune frequency is independent of the
+        number of batch writers, and so a service-check write never touches — or rolls back
+        on a failure pruning — these legacy tables. The DELETEs are index-supported, so the
+        gate is about lock-hold frequency, not scan cost.
 
         Args:
             conn: Active SQLite connection (within a transaction).
+
+        Returns:
+            None.
         """
-        cutoff_ts = int((datetime.now() - timedelta(hours=self.RETENTION_HOURS)).timestamp())
-
-        # Delete old aggregates
+        now_monotonic = time.monotonic()
+        if now_monotonic - self._last_ping_prune_monotonic < 3600.0:
+            return
+        cutoff_ts = int((datetime.now() - timedelta(hours=self._retention_hours)).timestamp())
         conn.execute("DELETE FROM hourly_stats WHERE hour_timestamp < ?", (cutoff_ts,))
-
-        # Delete old errors
         conn.execute("DELETE FROM ping_errors WHERE timestamp < ?", (cutoff_ts,))
+        # Advance the gate only after the DELETEs so a failed prune retries on the next batch.
+        self._last_ping_prune_monotonic = now_monotonic
+
+    def _cleanup_check_data(self, conn: sqlite3.Connection) -> None:
+        """
+        Delete service-check aggregates/errors older than the retention window, once per hour.
+
+        Separate from the ping prune (the parallel-table boundary): add_check_batch touches
+        ONLY the check_* tables. check_ssl_state is deliberately NOT pruned — it is
+        current-state (one row per check), and pruning it would blank the SSL card between the
+        widely-spaced SSL checks.
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+
+        Returns:
+            None.
+        """
+        now_monotonic = time.monotonic()
+        if now_monotonic - self._last_check_prune_monotonic < 3600.0:
+            return
+        cutoff_ts = int((datetime.now() - timedelta(hours=self._retention_hours)).timestamp())
+        conn.execute("DELETE FROM check_hourly_stats WHERE hour_timestamp < ?", (cutoff_ts,))
+        conn.execute("DELETE FROM check_errors WHERE timestamp < ?", (cutoff_ts,))
+        # Advance the gate only after the DELETEs so a failed prune retries on the next batch.
+        self._last_check_prune_monotonic = now_monotonic
 
     def clear_server_history(self, server_key: str) -> bool:
         """
@@ -750,7 +1288,9 @@ class SqliteStatisticsRepository:
 
             with self._db_lock, self._get_connection() as conn:
                 if provider_type:
-                    # Delete rows only for the specific provider
+                    # Delete rows only for the specific provider. The ping tables key on
+                    # provider_type (an alias); the check tables key on provider_alias —
+                    # same value, different column name.
                     conn.execute(
                         "DELETE FROM hourly_stats WHERE server_id = ? AND provider_type = ?",
                         (server_id, provider_type),
@@ -759,10 +1299,25 @@ class SqliteStatisticsRepository:
                         "DELETE FROM ping_errors WHERE server_id = ? AND provider_type = ?",
                         (server_id, provider_type),
                     )
+                    conn.execute(
+                        "DELETE FROM check_hourly_stats WHERE server_id = ? AND provider_alias = ?",
+                        (server_id, provider_type),
+                    )
+                    conn.execute(
+                        "DELETE FROM check_errors WHERE server_id = ? AND provider_alias = ?",
+                        (server_id, provider_type),
+                    )
+                    conn.execute(
+                        "DELETE FROM check_ssl_state WHERE server_id = ? AND provider_alias = ?",
+                        (server_id, provider_type),
+                    )
                 else:
                     # Legacy behavior - delete by server_id (all providers)
                     conn.execute("DELETE FROM hourly_stats WHERE server_id = ?", (server_id,))
                     conn.execute("DELETE FROM ping_errors WHERE server_id = ?", (server_id,))
+                    conn.execute("DELETE FROM check_hourly_stats WHERE server_id = ?", (server_id,))
+                    conn.execute("DELETE FROM check_errors WHERE server_id = ?", (server_id,))
+                    conn.execute("DELETE FROM check_ssl_state WHERE server_id = ?", (server_id,))
 
                 return True
         except sqlite3.Error as e:

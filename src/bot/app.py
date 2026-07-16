@@ -15,6 +15,7 @@ from .routers import (
     servers_router,
     balance_router,
     settings_router,
+    checks_router,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,12 +83,12 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     1. Middleware (MUST come BEFORE routers!)
     2. Routers
 
-    FSM storage is the aiogram default in-memory backend (no ``storage=`` passed):
-    fine for the only FSM flow — the short-lived, admin-only custom balance-threshold
-    input — whose state is intentionally transient and is re-armed/cleared on the next
-    interaction. A bot restart mid-input loses that state harmlessly (the prompt's
-    Cancel re-renders cleanly). Switch to a persistent storage only if multi-replica or
-    multi-step flows are added.
+    FSM storage is the aiogram default in-memory backend (no ``storage=`` passed): the FSM
+    flows are short-lived, admin-only input wizards (the custom balance-threshold input and
+    the multi-step add-check wizard). Their partial state is intentionally transient — a bot
+    restart mid-input loses a half-typed check or threshold harmlessly (the admin re-enters
+    it; each prompt's Cancel/menu-tap exits cleanly). Persistent storage would only be
+    warranted for multi-replica deployment, which this single-process bot is not.
 
     Args:
         settings: Application settings
@@ -122,9 +123,13 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(monitoring_router)
     dp.include_router(servers_router)
     dp.include_router(balance_router)
+    # After servers_router (its "Checks" button lives on the server-control screen) and
+    # after settings_router (so the check-wizard FSM message handlers, scoped to CheckForm
+    # states, never outrank the settings FSM handler).
+    dp.include_router(checks_router)
     logger.info(
         "Routers registered: start_router, settings_router, monitoring_router, "
-        "servers_router, balance_router"
+        "servers_router, balance_router, checks_router"
     )
 
     # Global fallback error handler (backstops the un-decorated entry-point handlers)

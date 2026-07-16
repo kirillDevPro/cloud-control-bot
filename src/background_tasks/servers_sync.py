@@ -10,6 +10,7 @@ from aiogram import Bot
 from ..storage import ServersRepository, SqliteStatisticsRepository
 from ..exceptions import is_transient_error
 from .ping_processor import forget_server
+from .service_checks import forget_server_checks
 from ..bot.notifications import (
     render_error_message,
     send_server_added_notification,
@@ -46,7 +47,8 @@ async def servers_sync_task(
     2. Synchronizes it with local storage (add/remove/update)
     3. Manages monitoring worker processes (start/stop)
     4. Sends notifications to administrators about changes
-    5. Clears statistics for removed servers
+    5. Clears ping and service-check statistics plus in-memory alert/schedule state for
+       removed servers, while preserving their persisted check configuration
 
     Provider availability alerting is debounced: transient failures
     (5xx/timeout/rate-limit) only alert once they become a sustained outage
@@ -267,6 +269,11 @@ async def servers_sync_task(
 
                     # Drop the removed server's per-server notification state (anti-leak).
                     forget_server(composite_key)
+                    # Drop the removed server's in-memory service-check alert/schedule
+                    # state. Deliberately NOT deleting its persisted check config: a
+                    # provider returning an erroneous empty list must not vaporize a
+                    # user's hand-built checks (they resume if the server returns).
+                    forget_server_checks(composite_key)
 
                     # Send a removal notification
                     try:

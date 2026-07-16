@@ -387,6 +387,182 @@ async def send_critical_error_notification(
     )
 
 
+async def send_check_down_notification(
+    bot: Bot,
+    admin_ids: list[int],
+    server_name: str,
+    check_desc: str,
+    error: str | None,
+) -> bool:
+    """
+    Send a notification that a service check has become unreachable or started failing.
+
+    Returns a bool because the caller advances its per-check anti-flap state ONLY on
+    confirmed delivery, so an undelivered alert is retried on the next cycle.
+
+    Args:
+        bot: Bot instance.
+        admin_ids: Administrator IDs.
+        server_name: Human-readable server name.
+        check_desc: Technical check descriptor (e.g. "TCP 1.2.3.4:443").
+        error: Optional failure detail.
+
+    Returns:
+        bool: True if delivered to at least one administrator (see _broadcast_to_admins).
+    """
+    name, check = esc(server_name), esc(check_desc)
+    error_safe = esc(error) if error else None
+
+    def render(language: str) -> str:
+        """Render the check-down message in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized check-down notification body.
+        """
+        message = (
+            translate("svc.check_down.title", language)
+            + "\n\n"
+            + translate("svc.check.body", language, server=name, check=check)
+        )
+        if error_safe is not None:
+            message += "\n\n" + translate("notif.error_label", language, error=error_safe)
+        return message
+
+    return await _broadcast_to_admins(bot, admin_ids, render, log_label="check down notification")
+
+
+async def send_check_up_notification(
+    bot: Bot, admin_ids: list[int], server_name: str, check_desc: str
+) -> bool:
+    """
+    Send a notification that a previously-failing service check has recovered.
+
+    Args:
+        bot: Bot instance.
+        admin_ids: Administrator IDs.
+        server_name: Human-readable server name.
+        check_desc: Technical check descriptor (e.g. "TCP 1.2.3.4:443").
+
+    Returns:
+        bool: True if delivered to at least one administrator (see _broadcast_to_admins).
+    """
+    name, check = esc(server_name), esc(check_desc)
+
+    def render(language: str) -> str:
+        """Render the check-up message in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized check-up notification body.
+        """
+        return (
+            translate("svc.check_up.title", language)
+            + "\n\n"
+            + translate("svc.check.body", language, server=name, check=check)
+        )
+
+    return await _broadcast_to_admins(bot, admin_ids, render, log_label="check up notification")
+
+
+async def send_ssl_expiry_notification(
+    bot: Bot,
+    admin_ids: list[int],
+    server_name: str,
+    check_desc: str,
+    *,
+    days_left: int | None,
+    invalid: bool,
+    detail: str | None,
+) -> bool:
+    """
+    Send a level-triggered SSL certificate alert (expiring soon, or invalid/expired).
+
+    Args:
+        bot: Bot instance.
+        admin_ids: Administrator IDs.
+        server_name: Human-readable server name.
+        check_desc: Technical check descriptor (e.g. "SSL 1.2.3.4:443").
+        days_left: Days until expiry (used for the "expiring" wording; may be negative).
+        invalid: True for an invalid/expired certificate (chain trust or expiry), False
+            for a still-valid certificate merely inside the warning window.
+        detail: Optional failure detail (for the invalid case).
+
+    Returns:
+        bool: True if delivered to at least one administrator (see _broadcast_to_admins).
+    """
+    name, check = esc(server_name), esc(check_desc)
+    detail_safe = esc(detail) if detail else None
+
+    def render(language: str) -> str:
+        """Render the SSL-expiry message in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized SSL-expiry notification body.
+        """
+        title_key = "svc.ssl_invalid.title" if invalid else "svc.ssl_expiring.title"
+        message = (
+            translate(title_key, language)
+            + "\n\n"
+            + translate("svc.check.body", language, server=name, check=check)
+        )
+        if not invalid and days_left is not None:
+            message += "\n\n" + translate_plural("svc.ssl.days_left", days_left, language)
+        if invalid and detail_safe is not None:
+            message += "\n\n" + translate("notif.error_label", language, error=detail_safe)
+        return message
+
+    return await _broadcast_to_admins(bot, admin_ids, render, log_label="ssl expiry notification")
+
+
+async def send_checks_rollup_notification(
+    bot: Bot, admin_ids: list[int], count: int, sample: list[str]
+) -> bool:
+    """
+    Send ONE roll-up alert when many service checks fail in the same cycle.
+
+    Replaces N individual down alerts so a fleet-wide failure cannot flood the bot
+    transport that ICMP up/down alerts also use.
+
+    Args:
+        bot: Bot instance.
+        admin_ids: Administrator IDs.
+        count: Total number of checks that started failing this cycle.
+        sample: A short sample of "server — check_desc" lines to show.
+
+    Returns:
+        bool: True if delivered to at least one administrator (see _broadcast_to_admins).
+    """
+    sample_safe = [esc(line) for line in sample]
+
+    def render(language: str) -> str:
+        """Render the checks roll-up message in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized roll-up notification body.
+        """
+        message = (
+            translate("svc.rollup.title", language)
+            + "\n\n"
+            + translate_plural("svc.rollup.count", count, language)
+        )
+        if sample_safe:
+            message += "\n\n" + "\n".join(sample_safe)
+        return message
+
+    return await _broadcast_to_admins(bot, admin_ids, render, log_label="checks rollup notification")
+
+
 async def send_provider_outage_notification(
     bot: Bot,
     admin_ids: list[int],

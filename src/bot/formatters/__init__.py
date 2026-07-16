@@ -20,8 +20,12 @@ from .balance import (
     format_balance_history,
     format_balance_provider_detail,
 )
+from .checks import format_checks_list, format_check_detail
 
 __all__ = [
+    # checks
+    "format_checks_list",
+    "format_check_detail",
     # common
     "format_number",
     "format_days_as_period",
