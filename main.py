@@ -243,6 +243,7 @@ async def start_background_tasks(
             ping_manager=app.ping_manager,
             admin_ids=app.admin_ids,
             sync_interval=app.settings.SERVERS_SYNC_INTERVAL,
+            max_removal_ratio=app.settings.SYNC_MAX_REMOVAL_RATIO,
             heartbeat=heartbeats.bound_beat("servers_sync"),
         ),
     )

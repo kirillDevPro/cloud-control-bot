@@ -445,6 +445,7 @@ class ServersRepository(BaseRepository[Server]):
         self,
         api_servers: list[Server],
         successful_aliases: set[str],
+        empty_ok_aliases: set[str] | None = None,
     ) -> dict:
         """
         Synchronize servers with the providers' APIs.
@@ -455,13 +456,22 @@ class ServersRepository(BaseRepository[Server]):
         without a pingable public IP).
 
         IMPORTANT: Uses the composite key (provider_alias, id) for correct identification.
-        IMPORTANT: Servers of providers that are not in successful_aliases are
-        NOT removed (the provider may be temporarily unavailable).
+        IMPORTANT: Servers of providers that are not in successful_aliases are NOT
+        removed. The set therefore acts as removal authorization: an omitted provider
+        may be unavailable, or its removals may have been deferred by a caller-side guard.
+        IMPORTANT: A provider that IS in successful_aliases but contributed NO servers at
+        all keeps its servers too — an empty-but-successful response is a provider glitch,
+        not an emptied account — unless the caller vouches for that emptiness via
+        empty_ok_aliases. Callers still owe their own sanity checks (a partial response is
+        not detectable here); this is only the floor beneath them.
 
         Args:
             api_servers: List of servers from the API
-            successful_aliases: Set of provider aliases that responded successfully.
-                Only servers from these providers are removed.
+            successful_aliases: Provider aliases whose servers are eligible for removal.
+                Callers may pass a guarded subset of all providers that responded.
+            empty_ok_aliases: Aliases whose EMPTY response the caller has verified (e.g.
+                by seeing it hold for several consecutive cycles). Only these may have
+                their whole fleet removed by a response that carries no servers at all.
 
         Returns:
             dict: Detailed operation statistics:
@@ -472,7 +482,7 @@ class ServersRepository(BaseRepository[Server]):
                   (new server, old IP) - require restarting their worker
                 - unchanged_count: int - number of servers with no changes
                 - skipped_removal_count: int - number of servers skipped during removal
-                - skipped_aliases: set[str] - aliases of providers whose servers were skipped
+                - skipped_aliases: set[str] - aliases whose server removals were skipped
         """
         from collections import defaultdict
 
@@ -556,15 +566,39 @@ class ServersRepository(BaseRepository[Server]):
                 added_servers.append(api_server)
                 provider_stats[provider_name]["added"] += 1
 
+        # Aliases the API answered for but returned NOTHING about. A provider whose API
+        # replies 200 with an empty list looks exactly like "the whole fleet is gone", and
+        # taking that at face value once cost the entire monitoring history of a provider.
+        # This is a last-resort floor inside the repository: the caller is expected to run
+        # its own sanity checks (and can then report the incident), but no caller may lose
+        # a fleet to one empty response.
+        aliases_in_api = {s.effective_alias for s in api_servers}
+        aliases_with_local_servers = {s.effective_alias for s in existing_servers_list}
+        empty_response_aliases = (
+            (aliases_with_local_servers - aliases_in_api)
+            & successful_aliases
+            - (empty_ok_aliases or set())
+        )
+
         # Find and remove servers that are no longer present in the API
         for key, existing_server in existing_servers.items():
             if key not in api_keys:
                 # Get the server's alias (effective_alias accounts for the legacy format)
                 server_alias = existing_server.effective_alias
 
-                # Check whether the provider was available
+                if server_alias in empty_response_aliases:
+                    logger.error(
+                        f"Skipping removal of {existing_server.composite_key}: provider "
+                        f"{server_alias} returned an EMPTY server list while servers are "
+                        f"known locally"
+                    )
+                    skipped_removal_count += 1
+                    skipped_aliases.add(server_alias)
+                    continue
+
+                # Removal requires explicit caller authorization because a provider may
+                # be unavailable or protected by a higher-level response-sanity guard.
                 if server_alias not in successful_aliases:
-                    # Provider unavailable - do NOT remove the server
                     logger.debug(
                         f"Skipping removal of {existing_server.composite_key}: "
                         f"provider {server_alias} was unavailable"
@@ -573,7 +607,7 @@ class ServersRepository(BaseRepository[Server]):
                     skipped_aliases.add(server_alias)
                     continue
 
-                # The server is absent from the API and the provider was available - remove it.
+                # The server is absent and its provider's removals are authorized.
                 # IMPORTANT: Use composite_key for exact removal, otherwise we might
                 # remove servers with the same ID from other accounts.
                 del result_map[key]

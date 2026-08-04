@@ -4,6 +4,7 @@ import sqlite3
 import logging
 import threading
 import time
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
@@ -16,35 +17,43 @@ logger = logging.getLogger(__name__)
 
 
 class SqliteStatisticsRepository:
-    """Store rolling ping statistics in SQLite with batching and corruption recovery.
+    """Store rolling ping and service-check statistics in SQLite.
 
     Rows are scoped by provider alias plus server ID so multi-account providers with the
     same bare server IDs never share statistics. The repository uses one cached SQLite
     connection protected by _db_lock, checkpoints WAL on close, and recreates the
-    database only on confirmed SQLite file corruption. The retention window is
-    configurable (default 30 days); at that size a rebuild is a real loss of history, so
-    the rebuild trigger stays narrowly gated on a genuinely malformed file.
+    database only on confirmed SQLite file corruption. Removed servers are tombstoned so
+    their history survives a separate grace window before physical deletion. The rolling
+    retention window is configurable (default 30 days); at that size a rebuild is a real
+    loss of history, so the rebuild trigger stays narrowly gated on a genuinely malformed
+    file.
     """
 
     MAX_ERRORS_PER_SERVER = 100
 
-    def __init__(self, db_path: Path, retention_days: int = 30):
+    def __init__(self, db_path: Path, retention_days: int = 30, deleted_grace_days: int = 7):
         """
         Initialize the repository.
 
         Args:
             db_path: Path to the SQLite database file.
             retention_days: Rolling window in days after which aggregates and error
-                rows are pruned. Must be positive.
+                rows are pruned. Values below one are normalized to one day.
+            deleted_grace_days: How long a removed server's statistics survive before
+                purge_expired_deleted() erases them. Values below one are normalized to
+                one day.
         """
         self.db_path = db_path
         self._retention_hours = max(1, retention_days) * 24
+        self._deleted_grace_seconds = max(1, deleted_grace_days) * 86400
         # Monotonic-clock time of the last prune per SUBSYSTEM, so each prune runs at
         # most once per hour independent of how many batches call it, and so a service-check
         # write never prunes — or rolls back on a failure pruning — the legacy ping tables and
         # vice-versa: each writer prunes ONLY its own tables (the parallel-table boundary).
         self._last_ping_prune_monotonic: float = 0.0
         self._last_check_prune_monotonic: float = 0.0
+        # Same shape for the tombstone purge, which the server-sync task drives.
+        self._last_deleted_purge_monotonic: float = 0.0
         self._connection: sqlite3.Connection | None = None
         # Guards lazy creation/close of the cached connection.
         self._connection_lock = threading.Lock()
@@ -374,6 +383,25 @@ class SqliteStatisticsRepository:
 
                     UNIQUE(server_id, provider_alias, check_id)
                 );
+
+                -- Tombstones for removed servers. A server dropped by servers_sync is
+                -- recorded here instead of having its history deleted on the spot: a
+                -- provider API that returns a truncated list would otherwise vaporize
+                -- real history, and the same servers reappear minutes later. The rows are
+                -- purged (together with the server's statistics) only after the grace
+                -- window; a server that comes back before then has its tombstone removed
+                -- and keeps every hour of history.
+                CREATE TABLE IF NOT EXISTS deleted_servers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id TEXT NOT NULL,
+                    provider_alias TEXT NOT NULL,
+                    deleted_at INTEGER NOT NULL,
+
+                    UNIQUE(server_id, provider_alias)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_deleted_servers_deleted_at
+                    ON deleted_servers(deleted_at);
             """
             )
 
@@ -1263,66 +1291,188 @@ class SqliteStatisticsRepository:
         # Advance the gate only after the DELETEs so a failed prune retries on the next batch.
         self._last_check_prune_monotonic = now_monotonic
 
-    def clear_server_history(self, server_key: str) -> bool:
-        """
-        Delete all history for a server.
+    # === REMOVED-SERVER TOMBSTONES (deferred history purge) ===
 
-        Accepts both a plain server_id and a composite_key of the form
-        "provider:server_id". On SQLite error, returns False instead of raising.
+    @staticmethod
+    def _split_composite_key(server_key: str) -> tuple[str, str] | None:
+        """Split a "provider_alias:server_id" composite key into its two parts.
 
         Args:
-            server_key: A server ID, or a composite_key of the form
-                "provider:server_id".
+            server_key: Composite key of the form "provider_alias:server_id".
 
         Returns:
-            bool: True if the history was deleted, False on error.
+            tuple[str, str] | None: (provider_alias, server_id), or None if the key
+                carries no alias — history is per (server_id, alias), so a bare id
+                cannot address it unambiguously.
         """
-        try:
-            # Parse the composite_key if given in "provider:server_id" form
-            if ":" in server_key:
-                provider_type, server_id = server_key.split(":", 1)
-            else:
-                # Legacy format - server_id only (for backward compatibility)
-                server_id = server_key
-                provider_type = None
+        if ":" not in server_key:
+            logger.warning(f"Server key {server_key!r} carries no provider alias; ignoring")
+            return None
+        provider_alias, server_id = server_key.split(":", 1)
+        if not provider_alias or not server_id:
+            logger.warning(f"Server key {server_key!r} is malformed; ignoring")
+            return None
+        return provider_alias, server_id
 
-            with self._db_lock, self._get_connection() as conn:
-                if provider_type:
-                    # Delete rows only for the specific provider. The ping tables key on
-                    # provider_type (an alias); the check tables key on provider_alias —
-                    # same value, different column name.
-                    conn.execute(
-                        "DELETE FROM hourly_stats WHERE server_id = ? AND provider_type = ?",
-                        (server_id, provider_type),
-                    )
-                    conn.execute(
-                        "DELETE FROM ping_errors WHERE server_id = ? AND provider_type = ?",
-                        (server_id, provider_type),
-                    )
-                    conn.execute(
-                        "DELETE FROM check_hourly_stats WHERE server_id = ? AND provider_alias = ?",
-                        (server_id, provider_type),
-                    )
-                    conn.execute(
-                        "DELETE FROM check_errors WHERE server_id = ? AND provider_alias = ?",
-                        (server_id, provider_type),
-                    )
-                    conn.execute(
-                        "DELETE FROM check_ssl_state WHERE server_id = ? AND provider_alias = ?",
-                        (server_id, provider_type),
-                    )
-                else:
-                    # Legacy behavior - delete by server_id (all providers)
-                    conn.execute("DELETE FROM hourly_stats WHERE server_id = ?", (server_id,))
-                    conn.execute("DELETE FROM ping_errors WHERE server_id = ?", (server_id,))
-                    conn.execute("DELETE FROM check_hourly_stats WHERE server_id = ?", (server_id,))
-                    conn.execute("DELETE FROM check_errors WHERE server_id = ?", (server_id,))
-                    conn.execute("DELETE FROM check_ssl_state WHERE server_id = ?", (server_id,))
+    @staticmethod
+    def _delete_server_rows(conn: sqlite3.Connection, provider_alias: str, server_id: str) -> None:
+        """Delete every statistics row belonging to one server of one provider.
 
-                return True
-        except sqlite3.Error as e:
-            logger.error(f"Failed to clear history for {server_key}: {e}", exc_info=True)
+        The ping tables key on provider_type (a misnomer — it holds an alias); the check
+        tables key on provider_alias. Same value, different column name.
+
+        Args:
+            conn: Active SQLite connection (within a transaction).
+            provider_alias: Provider alias the server belongs to.
+            server_id: Provider-side server ID.
+
+        Returns:
+            None.
+        """
+        conn.execute(
+            "DELETE FROM hourly_stats WHERE server_id = ? AND provider_type = ?",
+            (server_id, provider_alias),
+        )
+        conn.execute(
+            "DELETE FROM ping_errors WHERE server_id = ? AND provider_type = ?",
+            (server_id, provider_alias),
+        )
+        conn.execute(
+            "DELETE FROM check_hourly_stats WHERE server_id = ? AND provider_alias = ?",
+            (server_id, provider_alias),
+        )
+        conn.execute(
+            "DELETE FROM check_errors WHERE server_id = ? AND provider_alias = ?",
+            (server_id, provider_alias),
+        )
+        conn.execute(
+            "DELETE FROM check_ssl_state WHERE server_id = ? AND provider_alias = ?",
+            (server_id, provider_alias),
+        )
+
+    def mark_server_deleted(self, server_key: str) -> bool:
+        """
+        Tombstone a removed server instead of erasing its history immediately.
+
+        The history is purged only once the grace window elapses (purge_expired_deleted),
+        so a server that disappears because a provider API hiccuped — and reappears on a
+        later sync cycle — keeps every hour of statistics.
+
+        Args:
+            server_key: Composite key of the form "provider_alias:server_id".
+
+        Returns:
+            bool: True if the tombstone was written, False on a malformed key or error.
+        """
+        parts = self._split_composite_key(server_key)
+        if parts is None:
             return False
+        provider_alias, server_id = parts
+
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO deleted_servers (server_id, provider_alias, deleted_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(server_id, provider_alias)
+                        DO UPDATE SET deleted_at = excluded.deleted_at
+                    """,
+                    (server_id, provider_alias, int(datetime.now().timestamp())),
+                )
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Failed to tombstone {server_key}: {e}", exc_info=True)
+            return False
+
+    def unmark_servers_deleted(self, server_keys: Iterable[str]) -> int:
+        """
+        Drop the tombstones of servers that exist again, keeping their history.
+
+        Args:
+            server_keys: Composite keys of the form "provider_alias:server_id".
+
+        Returns:
+            int: Number of tombstones removed.
+        """
+        pairs = [
+            parts for key in server_keys if (parts := self._split_composite_key(key)) is not None
+        ]
+        if not pairs:
+            return 0
+
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                cursor = conn.executemany(
+                    "DELETE FROM deleted_servers WHERE server_id = ? AND provider_alias = ?",
+                    [(server_id, provider_alias) for provider_alias, server_id in pairs],
+                )
+                return max(0, cursor.rowcount)
+        except sqlite3.Error as e:
+            logger.error(f"Failed to clear statistics tombstones: {e}", exc_info=True)
+            return 0
+
+    def purge_expired_deleted(self, present_keys: Iterable[str] = ()) -> int:
+        """
+        Physically delete the statistics of servers tombstoned longer than the grace window.
+
+        Time-gated to once per hour like the retention prunes. Driven by the server-sync
+        task rather than by a batch writer: removing the last enabled server also removes
+        every ping batch, and a purge that only ran on writes would then never run at all.
+
+        present_keys is the LAST safety net: a server that exists right now must never lose
+        its history, whatever the tombstone table says. Anything that left a stale tombstone
+        behind — a failed unmark, a crash between the two writes — is reconciled here rather
+        than surfacing as silent data loss a week later.
+
+        Args:
+            present_keys: Composite keys of every server currently known locally. Their
+                expired tombstones are dropped instead of being acted on.
+
+        Returns:
+            int: Number of servers purged (0 when the hourly gate is closed).
+        """
+        now_monotonic = time.monotonic()
+        if now_monotonic - self._last_deleted_purge_monotonic < 3600.0:
+            return 0
+
+        present = {
+            parts
+            for key in present_keys
+            if (parts := self._split_composite_key(key)) is not None
+        }
+        cutoff_ts = int(datetime.now().timestamp()) - self._deleted_grace_seconds
+        try:
+            with self._db_lock, self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT server_id, provider_alias FROM deleted_servers WHERE deleted_at < ?",
+                    (cutoff_ts,),
+                ).fetchall()
+
+                purged = 0
+                for row in rows:
+                    provider_alias, server_id = row["provider_alias"], row["server_id"]
+                    if (provider_alias, server_id) in present:
+                        logger.warning(
+                            f"Server {provider_alias}:{server_id} is present but was still "
+                            f"tombstoned; keeping its history and clearing the tombstone"
+                        )
+                        continue
+                    self._delete_server_rows(conn, provider_alias, server_id)
+                    purged += 1
+
+                # One statement clears every tombstone handled above (purged or spared):
+                # nothing can insert a row meanwhile, the write lock is held throughout.
+                conn.execute("DELETE FROM deleted_servers WHERE deleted_at < ?", (cutoff_ts,))
+
+                # Advance the gate only after a successful purge so a failure retries.
+                self._last_deleted_purge_monotonic = now_monotonic
+                if purged:
+                    logger.info(f"Purged statistics of {purged} servers past the grace window")
+                return purged
+        except sqlite3.Error as e:
+            logger.error(f"Failed to purge tombstoned servers: {e}", exc_info=True)
+            return 0
 
     # === UTILITIES ===
 

@@ -67,7 +67,11 @@ server, supervised background tasks, and heartbeat-based stall detection for una
 - **Balance & cost tracking** — prepaid balance for Vultr, monthly costs via AWS Cost Explorer,
   with low-balance threshold alerts.
 - **Statistics** — hourly availability stats and ping-error history persisted in SQLite, on a
-  configurable rolling window (30 days by default).
+  configurable rolling window (30 days by default). A removed server's history is kept for a
+  grace period instead of being erased at once, so a server that comes back keeps it.
+- **Guarded server removal** — a provider API that answers "success" with an empty or truncated
+  server list cannot wipe a fleet: an empty response is ignored until it persists for about an
+  hour, and a mass disappearance is applied only once the next sync cycle reports the same thing.
 - **Self-healing** — a supervisor restarts crashed background tasks and reconciles missing
   workers; subsystem health (queue fill, live worker count, manager liveness) is monitored.
 
@@ -222,9 +226,13 @@ balance:
   threshold: 2000.0     # low-balance alert threshold (USD)
   check_interval: 10800 # balance poll interval (seconds)
 sync:
-  servers_interval: 600 # server-list sync interval (seconds)
+  servers_interval: 600  # server-list sync interval (seconds)
+  max_removal_ratio: 0.3 # share of a provider's fleet whose simultaneous disappearance
+                         # must be confirmed by a second sync cycle before removal (0-1)
 stats:
-  retention_days: 30    # rolling statistics window in days (1-365)
+  retention_days: 30     # rolling statistics window in days (1-365)
+  deleted_grace_days: 7  # keep a removed server's statistics this long, so a server
+                         # that reappears keeps its history (1-90)
 checks:                 # per-server TCP/HTTP/SSL service checks
   interval: 60          # default TCP/HTTP check interval in seconds (10-3600)
   tcp_timeout: 5        # TCP connect-check timeout in seconds (1-60)

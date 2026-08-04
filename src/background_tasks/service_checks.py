@@ -500,8 +500,10 @@ async def _run_cycle(
     ran = await asyncio.gather(*(run(s, c) for s, c in due), return_exceptions=True)
 
     # Re-validate against FRESH state: a check deleted or DISABLED, or a server removed, mid-
-    # cycle must not have its stale in-flight result persisted (recreating cleared history) or
-    # alerted. Server removal deliberately PRESERVES check config, so liveness is checked too.
+    # cycle must not have its stale in-flight result persisted or alerted — a deleted check
+    # clears its rows, and a removed server's history is tombstoned for later purge, so a
+    # late write would resurrect either. Server removal deliberately PRESERVES check config,
+    # so liveness is checked too.
     fresh = checks_getter()
     fresh_enabled_keys = {
         (ck, c.check_id) for ck, checks in fresh.items() for c in checks if c.enabled

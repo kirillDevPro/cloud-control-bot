@@ -677,6 +677,136 @@ async def send_provider_recovered_notification(
     )
 
 
+async def _send_sync_guard_alert(
+    bot: Bot,
+    admin_ids: list[int],
+    *,
+    title_key: str,
+    body_key: str,
+    footer_key: str,
+    provider_label: str,
+    log_label: str,
+    **body_kwargs: object,
+) -> bool:
+    """
+    Send a title/body/footer alert raised by one of the server-sync removal guards.
+
+    Both guards report the same shape — a headline naming the provider, a body carrying
+    the counts, and a footer explaining what happens next — so they share one renderer.
+    The three keys are passed in full (not as a prefix) so the i18n parity check can see
+    which catalog entries this code references.
+
+    Args:
+        bot: Bot instance
+        admin_ids: List of administrator IDs
+        title_key: Catalog key of the headline
+        body_key: Catalog key of the body
+        footer_key: Catalog key of the footer
+        provider_label: Human-readable provider name (display_name)
+        log_label: Description used in delivery-failure logs
+        **body_kwargs: Substitution values for the body template
+
+    Returns:
+        bool: True if at least one administrator received the notification.
+    """
+    provider = esc(provider_label)
+
+    def render(language: str) -> str:
+        """Render the guard alert in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized guard-alert body.
+        """
+        return (
+            translate(title_key, language, provider=provider)
+            + "\n\n"
+            + translate(body_key, language, **body_kwargs)
+            + "\n\n"
+            + translate(footer_key, language)
+        )
+
+    return await _broadcast_to_admins(bot, admin_ids, render, log_label=log_label)
+
+
+async def send_suspicious_api_response_notification(
+    bot: Bot,
+    admin_ids: list[int],
+    provider_label: str,
+    local_count: int,
+) -> bool:
+    """
+    Report that a provider returned an EMPTY server list while servers are known locally.
+
+    An empty-but-successful response is the shape a provider outage takes when its API
+    answers HTTP 200 with no data: taken at face value it would remove every server of
+    that provider. The sync task skips the removal and reports it here.
+
+    Returns delivery success so the caller can arm its deduplication only once at least
+    one admin actually received the alert (the project's delivery-confirmed invariant).
+
+    Args:
+        bot: Bot instance
+        admin_ids: List of administrator IDs
+        provider_label: Human-readable provider name (display_name)
+        local_count: Number of servers currently known locally for that provider
+
+    Returns:
+        bool: True if at least one administrator received the notification.
+    """
+    return await _send_sync_guard_alert(
+        bot,
+        admin_ids,
+        title_key="notif.sync_suspicious.title",
+        body_key="notif.sync_suspicious.body",
+        footer_key="notif.sync_suspicious.footer",
+        provider_label=provider_label,
+        log_label=f"suspicious API response notification for {provider_label}",
+        count=local_count,
+    )
+
+
+async def send_mass_removal_deferred_notification(
+    bot: Bot,
+    admin_ids: list[int],
+    provider_label: str,
+    removal_count: int,
+    total_count: int,
+) -> bool:
+    """
+    Report that an unusually large batch of servers vanished and its removal was deferred.
+
+    The removal is applied only once the next sync cycle reports the same missing set, so
+    one truncated API response can never wipe a fleet.
+
+    Returns delivery success so the caller can arm its deduplication only once at least
+    one admin actually received the alert (the project's delivery-confirmed invariant).
+
+    Args:
+        bot: Bot instance
+        admin_ids: List of administrator IDs
+        provider_label: Human-readable provider name (display_name)
+        removal_count: Number of servers missing from the API response
+        total_count: Number of servers known locally for that provider
+
+    Returns:
+        bool: True if at least one administrator received the notification.
+    """
+    return await _send_sync_guard_alert(
+        bot,
+        admin_ids,
+        title_key="notif.sync_mass_removal.title",
+        body_key="notif.sync_mass_removal.body",
+        footer_key="notif.sync_mass_removal.footer",
+        provider_label=provider_label,
+        log_label=f"deferred mass removal notification for {provider_label}",
+        count=removal_count,
+        total=total_count,
+    )
+
+
 async def send_server_added_notification(
     bot: Bot,
     admin_ids: list[int],

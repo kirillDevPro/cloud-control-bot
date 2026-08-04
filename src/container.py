@@ -180,6 +180,7 @@ class ContainerBuilder:
         stats_repo = SqliteStatisticsRepository(
             settings.get_statistics_db_file(),
             retention_days=settings.STATS_RETENTION_DAYS,
+            deleted_grace_days=settings.STATS_DELETED_GRACE_DAYS,
         )
         balance_repo = BalanceRepository(settings.get_balance_history_file())
 

@@ -291,7 +291,24 @@ MESSAGES: dict[str, str] = {
         'Server <b>{name}</b> ({ip}) no longer exists at provider <b>{provider}</b>.\n'
         '\n'
         '⛔ Monitoring stopped.\n'
-        '🗑️ Statistics deleted.'
+        '🗑️ Statistics are kept for a while, so a server that comes back keeps its history.'
+    ),
+    'notif.sync_suspicious.title': '⚠️ <b>Suspicious API response: {provider}</b>',
+    'notif.sync_suspicious.body': (
+        'The API returned an empty server list while {count} servers are known locally. '
+        'Nothing was removed — monitoring and statistics are intact.'
+    ),
+    'notif.sync_suspicious.footer': (
+        'If the list really is empty and stays that way for about an hour, the servers will be '
+        'removed automatically.'
+    ),
+    'notif.sync_mass_removal.title': '⚠️ <b>Mass removal deferred: {provider}</b>',
+    'notif.sync_mass_removal.body': (
+        '{count} of {total} servers disappeared from the API response at once. '
+        'Removal is deferred until the next sync cycle reports the same thing.'
+    ),
+    'notif.sync_mass_removal.footer': (
+        'If this is a provider glitch, the servers will simply come back and nothing is lost.'
     ),
     # alert
     'alert.provider_api.title': '{provider} API',

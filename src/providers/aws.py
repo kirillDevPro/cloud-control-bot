@@ -703,17 +703,16 @@ class AWSProvider(BaseProvider, RetryMixin):
                 return [parse_instance(inst, region) for inst in instances]
 
             except (AWSAuthenticationError, AWSPermissionError):
-                # Persistent auth/permission errors MUST propagate instead of
-                # collapsing into an empty list: otherwise get_servers returns []
-                # as "success" and servers_sync removes every server of this account
-                # (and wipes its stats). Mirrors _get_all_regions / get_server.
+                # Persistent auth/permission errors MUST propagate instead of collapsing
+                # into an empty list: an empty "success" is indistinguishable from an
+                # emptied account, and servers_sync only treats it as a glitch for a
+                # limited number of cycles. Mirrors _get_all_regions / get_server.
                 raise
             except Exception as e:
                 # Transient failures (5xx/throttling/network/...) must propagate too,
                 # so get_servers can tell a FAILED region from a legitimately-empty one
-                # and never report a total outage as an empty "success" (which would
-                # delete every server of this account). It re-raises only if EVERY
-                # enabled fetch failed; otherwise it keeps per-region resilience.
+                # and never report a total outage as an empty "success". It re-raises only
+                # if EVERY enabled fetch failed; otherwise it keeps per-region resilience.
                 logger.error(
                     f"[FAIL] Error fetching {service_label} in {region}: {e}", exc_info=True
                 )

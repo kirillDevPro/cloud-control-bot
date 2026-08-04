@@ -69,8 +69,10 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
             "BALANCE_CHECK_INTERVAL": ("balance", "check_interval"),
             # Synchronization
             "SERVERS_SYNC_INTERVAL": ("sync", "servers_interval"),
+            "SYNC_MAX_REMOVAL_RATIO": ("sync", "max_removal_ratio"),
             # Statistics
             "STATS_RETENTION_DAYS": ("stats", "retention_days"),
+            "STATS_DELETED_GRACE_DAYS": ("stats", "deleted_grace_days"),
             # Service checks
             "SERVICE_CHECK_INTERVAL": ("checks", "interval"),
             "TCP_CHECK_TIMEOUT": ("checks", "tcp_timeout"),
@@ -184,12 +186,33 @@ class Settings(BaseSettings):
         le=86400,  # maximum 24 hours
     )
 
+    SYNC_MAX_REMOVAL_RATIO: float = Field(
+        default=0.3,
+        description=(
+            "Share of a provider's known servers whose disappearance in ONE sync cycle is "
+            "treated as suspicious: such a removal is deferred until the next cycle reports "
+            "the same set. Guards against a provider API returning a truncated list."
+        ),
+        gt=0.0,
+        le=1.0,
+    )
+
     # Statistics
     STATS_RETENTION_DAYS: int = Field(
         default=30,
         description="Rolling statistics retention window in days",
         ge=1,  # minimum 1 day
         le=365,  # maximum 1 year
+    )
+
+    STATS_DELETED_GRACE_DAYS: int = Field(
+        default=7,
+        description=(
+            "How long a removed server's statistics are kept before being purged, so a "
+            "server that reappears (provider glitch, re-creation) keeps its history"
+        ),
+        ge=1,  # minimum 1 day
+        le=90,  # maximum 90 days
     )
 
     # Service checks (TCP / HTTP / SSL health checks beyond ICMP ping)

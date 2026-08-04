@@ -40,10 +40,14 @@ balance:
 # Server synchronization
 sync:
   servers_interval: 600  # Sync interval in seconds (10 minutes)
+  max_removal_ratio: 0.3 # Share of a provider's servers whose disappearance in one cycle is
+                         # suspicious: such a removal waits for the next cycle to confirm it (0-1)
 
 # Statistics
 stats:
   retention_days: 30     # Rolling statistics retention window in days (1-365)
+  deleted_grace_days: 7  # Keep a removed server's statistics this long, so a server that
+                         # reappears keeps its history (1-90)
 
 # Service checks (TCP / HTTP / SSL health checks beyond ICMP ping)
 checks:
