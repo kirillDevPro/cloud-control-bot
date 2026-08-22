@@ -231,10 +231,7 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             async def make_request() -> dict[str, Any]:
                 """Perform a single GET request for the current page and return the parsed JSON."""
-                client = await self._get_client()
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._get_json(url)
 
             data = await self._retry_with_backoff(make_request)
 
@@ -414,11 +411,8 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             async def make_request() -> dict[str, Any]:
                 """Perform a single GET request for one server and return the parsed JSON."""
-                client = await self._get_client()
                 url = f"{self.base_url}/servers/{server_id}"
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._get_json(url)
 
             data = await self._retry_with_backoff(make_request)
 
@@ -471,11 +465,8 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             async def make_request() -> dict[str, Any]:
                 """Perform a single POST request for the power action and return the parsed JSON."""
-                client = await self._get_client()
                 url = f"{self.base_url}/servers/{server_id}/actions/{action_path}"
-                response = await client.post(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._post_json(url)
 
             # Critical operation - 5 attempts instead of 3
             await self._retry_with_backoff(make_request, config=RetryConfig(max_retries=5))

@@ -3,6 +3,8 @@
 Provides a singleton httpx.AsyncClient for providers.
 """
 
+from typing import Any
+
 import httpx
 
 
@@ -74,6 +76,27 @@ class HttpClientMixin:
                 timeout=self._default_timeout,
             )
         return self._client
+
+    async def _get_json(self, url: str) -> dict[str, Any]:
+        """Perform a GET request and decode its JSON response."""
+        client = await self._get_client()
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+    async def _post_json(self, url: str) -> dict[str, Any]:
+        """Perform a POST request and decode its JSON response."""
+        client = await self._get_client()
+        response = await client.post(url)
+        response.raise_for_status()
+        return response.json()
+
+    async def _post_without_json(self, url: str) -> httpx.Response:
+        """Perform a POST request without decoding the response body."""
+        client = await self._get_client()
+        response = await client.post(url)
+        response.raise_for_status()
+        return response
 
     async def close(self) -> None:
         """Close the HTTP client."""

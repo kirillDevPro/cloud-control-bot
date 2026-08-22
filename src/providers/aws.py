@@ -913,49 +913,71 @@ class AWSProvider(BaseProvider, RetryMixin):
     async def _try_ec2_then_lightsail(
         self,
         server_id: str,
-        ec2_operation: Callable[[str, str], Any],
-        lightsail_operation: Callable[[str, str], Any],
+        ec2_operation: Callable[[Any, str], Any],
+        lightsail_operation: Callable[[Any, str], Any],
         operation_name: str,
+        failure_action: str,
     ) -> bool:
         """
-        Try to perform an operation on EC2 first, then on Lightsail.
+        Perform a retried server action on EC2 first, then on Lightsail.
 
         Args:
             server_id: Composite ID in the format "{region}:{instance_id}"
-            ec2_operation: Async function for EC2 (region, instance_id) -> Any
-            lightsail_operation: Async function for Lightsail (region, instance_id) -> Any
+            ec2_operation: Synchronous EC2 callback accepting a client and instance ID
+            lightsail_operation: Synchronous Lightsail callback accepting a client and instance ID
             operation_name: Name of the operation, used for logging
+            failure_action: Present participle used in the outer error log
 
         Returns:
             bool: True if the operation succeeded
         """
-        parsed = self._validate_composite_key(server_id)
-        if not parsed:
+        try:
+            parsed = self._validate_composite_key(server_id)
+            if not parsed:
+                return False
+
+            region, instance_id = parsed
+
+            # Try EC2
+            if self.enable_ec2:
+                try:
+                    ec2 = await self._get_ec2_client(region)
+                    await self._retry_with_backoff(
+                        lambda: asyncio.to_thread(ec2_operation, ec2, instance_id)
+                    )
+                    logger.info(f"[OK] AWS EC2 server {server_id} {operation_name}")
+                    return True
+                except (AWSNotFoundError, AWSAPIError) as e:
+                    # It may be a Lightsail ID
+                    logger.debug(
+                        f"EC2 {operation_name} failed for {server_id}: {e}, trying Lightsail"
+                    )
+
+            # Try Lightsail
+            if self.enable_lightsail:
+                try:
+                    lightsail = await self._get_lightsail_client(region)
+                    await self._retry_with_backoff(
+                        lambda: asyncio.to_thread(
+                            lightsail_operation, lightsail, instance_id
+                        )
+                    )
+                    logger.info(f"[OK] AWS Lightsail server {server_id} {operation_name}")
+                    return True
+                except (AWSNotFoundError, AWSAPIError) as e:
+                    logger.debug(
+                        f"Lightsail {operation_name} also failed for {server_id}: {e}"
+                    )
+
+            logger.error(f"[FAIL] AWS server {server_id} not found")
             return False
 
-        region, instance_id = parsed
-
-        # Try EC2
-        if self.enable_ec2:
-            try:
-                await ec2_operation(region, instance_id)
-                logger.info(f"[OK] AWS EC2 server {server_id} {operation_name}")
-                return True
-            except (AWSNotFoundError, AWSAPIError) as e:
-                # It may be a Lightsail ID
-                logger.debug(f"EC2 {operation_name} failed for {server_id}: {e}, trying Lightsail")
-
-        # Try Lightsail
-        if self.enable_lightsail:
-            try:
-                await lightsail_operation(region, instance_id)
-                logger.info(f"[OK] AWS Lightsail server {server_id} {operation_name}")
-                return True
-            except (AWSNotFoundError, AWSAPIError) as e:
-                logger.debug(f"Lightsail {operation_name} also failed for {server_id}: {e}")
-
-        logger.error(f"[FAIL] AWS server {server_id} not found")
-        return False
+        except Exception as e:
+            logger.error(
+                f"[FAIL] Error {failure_action} AWS server {server_id}: {e}",
+                exc_info=True,
+            )
+            return False
 
     async def start_server(self, server_id: str) -> bool:
         """
@@ -968,38 +990,15 @@ class AWSProvider(BaseProvider, RetryMixin):
             bool: True on success
         """
 
-        async def ec2_op(region: str, instance_id: str) -> None:
-            """Start the EC2 instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: EC2 instance ID.
-            """
-            ec2 = await self._get_ec2_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ec2.start_instances, InstanceIds=[instance_id])
-            )
-
-        async def lightsail_op(region: str, instance_id: str) -> None:
-            """Start the Lightsail instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: Lightsail instance name.
-            """
-            ls = await self._get_lightsail_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ls.start_instance, instanceName=instance_id)
-            )
-
-        try:
-            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "started")
-        except AWSInvalidStateError as e:
-            logger.warning(f"[WARN] Server {server_id} is already running: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"[FAIL] Error starting AWS server {server_id}: {e}", exc_info=True)
-            return False
+        return await self._try_ec2_then_lightsail(
+            server_id,
+            lambda ec2, instance_id: ec2.start_instances(InstanceIds=[instance_id]),
+            lambda lightsail, instance_id: lightsail.start_instance(
+                instanceName=instance_id
+            ),
+            "started",
+            "starting",
+        )
 
     async def stop_server(self, server_id: str) -> bool:
         """
@@ -1012,38 +1011,17 @@ class AWSProvider(BaseProvider, RetryMixin):
             bool: True on success
         """
 
-        async def ec2_op(region: str, instance_id: str) -> None:
-            """Force-stop the EC2 instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: EC2 instance ID.
-            """
-            ec2 = await self._get_ec2_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ec2.stop_instances, InstanceIds=[instance_id], Force=True)
-            )
-
-        async def lightsail_op(region: str, instance_id: str) -> None:
-            """Force-stop the Lightsail instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: Lightsail instance name.
-            """
-            ls = await self._get_lightsail_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ls.stop_instance, instanceName=instance_id, force=True)
-            )
-
-        try:
-            return await self._try_ec2_then_lightsail(server_id, ec2_op, lightsail_op, "stopped")
-        except AWSInvalidStateError as e:
-            logger.warning(f"[WARN] Server {server_id} is already stopped: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"[FAIL] Error stopping AWS server {server_id}: {e}", exc_info=True)
-            return False
+        return await self._try_ec2_then_lightsail(
+            server_id,
+            lambda ec2, instance_id: ec2.stop_instances(
+                InstanceIds=[instance_id], Force=True
+            ),
+            lambda lightsail, instance_id: lightsail.stop_instance(
+                instanceName=instance_id, force=True
+            ),
+            "stopped",
+            "stopping",
+        )
 
     async def shutdown_server(self, server_id: str) -> bool:
         """
@@ -1109,37 +1087,15 @@ class AWSProvider(BaseProvider, RetryMixin):
             bool: True on success
         """
 
-        async def ec2_op(region: str, instance_id: str) -> None:
-            """Reboot the EC2 instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: EC2 instance ID.
-            """
-            ec2 = await self._get_ec2_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ec2.reboot_instances, InstanceIds=[instance_id])
-            )
-
-        async def lightsail_op(region: str, instance_id: str) -> None:
-            """Reboot the Lightsail instance with retry.
-
-            Args:
-                region: AWS region.
-                instance_id: Lightsail instance name.
-            """
-            ls = await self._get_lightsail_client(region)
-            await self._retry_with_backoff(
-                lambda: asyncio.to_thread(ls.reboot_instance, instanceName=instance_id)
-            )
-
-        try:
-            return await self._try_ec2_then_lightsail(
-                server_id, ec2_op, lightsail_op, "rebooted"
-            )
-        except Exception as e:
-            logger.error(f"[FAIL] Error rebooting AWS server {server_id}: {e}", exc_info=True)
-            return False
+        return await self._try_ec2_then_lightsail(
+            server_id,
+            lambda ec2, instance_id: ec2.reboot_instances(InstanceIds=[instance_id]),
+            lambda lightsail, instance_id: lightsail.reboot_instance(
+                instanceName=instance_id
+            ),
+            "rebooted",
+            "rebooting",
+        )
 
     def supports_graceful_shutdown(self, server_id: str | None = None) -> bool:
         """

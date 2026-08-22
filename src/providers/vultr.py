@@ -227,10 +227,7 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                 Returns:
                     dict[str, Any]: Parsed JSON response body.
                 """
-                client = await self._get_client()
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._get_json(url)
 
             data = await self._retry_with_backoff(make_request)
 
@@ -326,11 +323,8 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                 Returns:
                     dict[str, Any]: Parsed JSON response body.
                 """
-                client = await self._get_client()
                 url = f"{self.base_url}/instances/{server_id}"
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._get_json(url)
 
             data = await self._retry_with_backoff(make_request)
 
@@ -387,11 +381,8 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                 Returns:
                     httpx.Response: Response after raise_for_status() succeeds.
                 """
-                client = await self._get_client()
                 url = f"{self.base_url}/instances/{server_id}/{action_path}"
-                response = await client.post(url)
-                response.raise_for_status()
-                return response
+                return await self._post_without_json(url)
 
             # Critical operation - 5 retries
             await self._retry_with_backoff(make_request, config=RetryConfig(max_retries=5))
@@ -491,11 +482,8 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
                 Returns:
                     dict[str, Any]: Parsed JSON response body.
                 """
-                client = await self._get_client()
                 url = f"{self.base_url}/account"
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
+                return await self._get_json(url)
 
             data = await self._retry_with_backoff(make_request)
 
