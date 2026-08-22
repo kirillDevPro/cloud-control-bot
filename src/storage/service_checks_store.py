@@ -238,6 +238,19 @@ def _ensure_loaded() -> None:
         _checks = _read_file()
 
 
+def _snapshot_checks() -> dict[str, list[CheckDefinition]]:
+    """Return a stable shallow copy of the in-memory check configuration.
+
+    Copying both the mapping and each per-server list keeps readers and the
+    lock-free persistence step isolated from later mutations. Caller MUST hold
+    ``_lock`` so the snapshot represents one consistent store state.
+
+    Returns:
+        dict[str, list[CheckDefinition]]: Independent mapping and list containers.
+    """
+    return {key: list(checks) for key, checks in _checks.items()}
+
+
 def get_checks(composite_key: str) -> list[CheckDefinition]:
     """Return the checks configured for a server.
 
@@ -262,7 +275,7 @@ def get_all_checks() -> dict[str, list[CheckDefinition]]:
     """
     with _lock:
         _ensure_loaded()
-        return {key: list(checks) for key, checks in _checks.items()}
+        return _snapshot_checks()
 
 
 def add_check(composite_key: str, definition: CheckDefinition) -> bool:
@@ -287,7 +300,7 @@ def add_check(composite_key: str, definition: CheckDefinition) -> bool:
                 logger.error("Not persisting check add for %s: store file unreadable", composite_key)
                 return False
             _checks.setdefault(composite_key, []).append(definition)
-            snapshot = {key: list(checks) for key, checks in _checks.items()}
+            snapshot = _snapshot_checks()
         return _persist(snapshot)
 
 
@@ -320,7 +333,7 @@ def update_check(composite_key: str, check_id: str, **fields: Any) -> bool:
                     break
             else:
                 return False
-            snapshot = {key: list(cs) for key, cs in _checks.items()}
+            snapshot = _snapshot_checks()
         return _persist(snapshot)
 
 
@@ -353,7 +366,7 @@ def delete_check(composite_key: str, check_id: str) -> bool:
                 _checks[composite_key] = remaining
             else:
                 del _checks[composite_key]
-            snapshot = {key: list(cs) for key, cs in _checks.items()}
+            snapshot = _snapshot_checks()
         return _persist(snapshot)
 
 
@@ -382,5 +395,5 @@ def forget_server_config(composite_key: str) -> bool:
             if composite_key not in _checks:
                 return False
             del _checks[composite_key]
-            snapshot = {key: list(cs) for key, cs in _checks.items()}
+            snapshot = _snapshot_checks()
         return _persist(snapshot)
