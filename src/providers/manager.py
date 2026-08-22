@@ -6,13 +6,71 @@ instances of the same provider type to be registered with different API
 keys (alias-based system).
 """
 
+import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from src.models.provider import ProviderType, ProviderConfig
 from src.providers.base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProviderServerListGather:
+    """Ordered raw results from one snapshot of the provider registry.
+
+    Attributes:
+        providers: Stable alias-to-provider/config snapshot used for the requests.
+        aliases: Provider aliases in the same positional order as ``results``.
+        results: Unclassified values returned by ``asyncio.gather``.
+    """
+
+    providers: dict[str, tuple[BaseProvider, ProviderConfig]]
+    aliases: list[str]
+    results: list[Any]
+
+
+class _ProviderRegistry(Protocol):
+    """Existing provider-manager protocol needed to gather server lists."""
+
+    def get_all_providers(self) -> dict[str, tuple[BaseProvider, ProviderConfig]]:
+        """Return one snapshot of the registered providers."""
+        ...
+
+
+async def gather_server_lists(
+    provider_manager: _ProviderRegistry,
+) -> ProviderServerListGather:
+    """Fetch every provider's server list concurrently in registry order.
+
+    The returned values are intentionally raw. Callers retain responsibility
+    for classifying exceptions and response types, assigning provider aliases,
+    and deciding how successful empty responses affect synchronization.
+
+    Args:
+        provider_manager: Manager exposing the existing ``get_all_providers`` protocol.
+
+    Returns:
+        ProviderServerListGather: Registry snapshot, ordered aliases, and raw
+            per-provider results aligned by position.
+    """
+    providers = provider_manager.get_all_providers()
+    provider_tasks = []
+    aliases = []
+
+    for alias, (provider, _config) in providers.items():
+        provider_tasks.append(provider.get_servers())
+        aliases.append(alias)
+
+    results = await asyncio.gather(*provider_tasks, return_exceptions=True)
+    return ProviderServerListGather(
+        providers=providers,
+        aliases=aliases,
+        results=results,
+    )
 
 
 class ProviderManager:

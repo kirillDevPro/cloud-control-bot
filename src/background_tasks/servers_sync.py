@@ -9,6 +9,7 @@ from typing import Any
 
 from aiogram import Bot
 
+from ..providers.manager import gather_server_lists
 from ..storage import ServersRepository, SqliteStatisticsRepository
 from ..exceptions import is_transient_error
 from .ping_processor import forget_server
@@ -375,22 +376,13 @@ async def servers_sync_task(
             await asyncio.sleep(sync_interval)
 
             try:
-                # Fetch all providers
-                providers_dict = provider_manager.get_all_providers()
+                # Fetch all providers in parallel while retaining registry order
+                gathered = await gather_server_lists(provider_manager)
+                providers_dict = gathered.providers
 
                 if not providers_dict:
                     logger.warning("No providers available for synchronization")
                     continue
-
-                # Fetch servers from all providers in parallel
-                provider_tasks = []
-                alias_order = []  # Keep the order to match results back to aliases
-                for alias, (provider, config) in providers_dict.items():
-                    provider_tasks.append(provider.get_servers())
-                    alias_order.append(alias)
-
-                # Await results, capturing exceptions instead of raising
-                results = await asyncio.gather(*provider_tasks, return_exceptions=True)
 
                 # Collect all servers, handling errors
                 all_servers: list[Any] = []
@@ -404,9 +396,9 @@ async def servers_sync_task(
                 # are the only ones allowed past the repository's empty-response floor.
                 confirmed_empty_aliases: set[str] = set()
 
-                for idx, alias in enumerate(alias_order):
+                for idx, alias in enumerate(gathered.aliases):
                     provider, config = providers_dict[alias]
-                    result = results[idx]
+                    result = gathered.results[idx]
 
                     provider_label = _provider_label(config, alias)
                     state = guard_state.setdefault(alias, _AliasGuardState())

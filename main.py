@@ -38,6 +38,7 @@ from src.background_tasks.supervisor import TaskFactory, supervise_background_ta
 from src.config import get_settings
 from src.container import ApplicationContainer, ContainerBuilder
 from src.models import Server
+from src.providers.manager import gather_server_lists
 from src.storage.runtime_settings import are_balance_alerts_enabled, get_balance_threshold
 from src.storage.service_checks_store import get_all_checks
 from src.utils.log_cleaner import log_cleanup_task
@@ -65,23 +66,14 @@ async def sync_servers_on_startup(app: ApplicationContainer) -> dict | None:
     logger.info("Syncing servers from providers...")
     all_servers: list[Server] = []
 
-    # Build tasks for fetching servers in parallel
-    provider_tasks = []
-    alias_order = []  # Preserve alias order so results can be matched back to providers
-
-    for alias, (provider, config) in app.provider_manager.get_all_providers().items():
-        provider_tasks.append(provider.get_servers())
-        alias_order.append(alias)
-
-    # Run all requests in parallel
-    results = await asyncio.gather(*provider_tasks, return_exceptions=True)
+    gathered = await gather_server_lists(app.provider_manager)
 
     # Counters to track provider availability
     failed_providers = []
     successful_providers = []
 
     # Process the results
-    for alias, result in zip(alias_order, results):
+    for alias, result in zip(gathered.aliases, gathered.results):
         # Check for exceptions (Exception, NOT BaseException, for correct shutdown)
         if isinstance(result, Exception):
             logger.error(f"Failed to fetch from {alias}: {result}")
