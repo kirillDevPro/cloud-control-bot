@@ -17,7 +17,7 @@ pyyaml==6.0.3
 pytz==2026.3.post1
 
 # X.509 certificate parsing for SSL-expiry checks (tz-aware not_valid_after_utc)
-cryptography==50.0.0
+cryptography==50.0.1
 
 # AWS SDK
 boto3==1.43.78
