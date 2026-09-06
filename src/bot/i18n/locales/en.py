@@ -302,6 +302,11 @@ MESSAGES: dict[str, str] = {
         'If the list really is empty and stays that way for about an hour, the servers will be '
         'removed automatically.'
     ),
+    'notif.sync_suspicious_recovered.title': '✅ <b>Server list is back: {provider}</b>',
+    'notif.sync_suspicious_recovered.body': (
+        'The API reports {servers} again after {duration} of empty responses. '
+        'Nothing was removed.'
+    ),
     'notif.sync_mass_removal.title': '⚠️ <b>Mass removal deferred: {provider}</b>',
     'notif.sync_mass_removal.body': (
         '{count} of {total} servers disappeared from the API response at once. '
@@ -414,6 +419,10 @@ PLURALS: dict[str, list[str]] = {
         '⏳ <b>Forecast:</b> ~{n} days until depletion',
     ],
     # plural
+    'plural.servers_reported': [
+        '{n} server',
+        '{n} servers',
+    ],
     'plural.checks_in_row': [
         '{n} check in a row',
         '{n} checks in a row',

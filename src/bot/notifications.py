@@ -768,6 +768,68 @@ async def send_suspicious_api_response_notification(
     )
 
 
+async def send_empty_response_recovered_notification(
+    bot: Bot,
+    admin_ids: list[int],
+    provider_label: str,
+    duration_seconds: int,
+    server_count: int,
+) -> bool:
+    """
+    Report that a provider's server list came back after an ALERTED empty streak.
+
+    Closes the incident opened by send_suspicious_api_response_notification, the same way
+    send_provider_recovered_notification closes a sustained-outage incident. Sent only when
+    an empty-response alert was actually delivered, so a self-healing glitch stays silent.
+
+    Returns delivery success so the caller discharges the recovery obligation only once at
+    least one admin actually received the notice — the same delivery-confirmed invariant
+    the alert itself follows. Without it, one transient Telegram failure at exactly the
+    cycle an alias recovers would drop the notice permanently.
+
+    Args:
+        bot: Bot instance
+        admin_ids: List of administrator IDs
+        provider_label: Human-readable provider name (display_name)
+        duration_seconds: How long the empty streak lasted, in seconds (localized per
+            recipient)
+        server_count: Number of servers the API reports again
+
+    Returns:
+        bool: True if at least one administrator received the notification.
+    """
+    provider = esc(provider_label)
+    duration_render = _render_duration(duration_seconds)
+
+    def render(language: str) -> str:
+        """Render the empty-response-recovered message in one recipient language.
+
+        Args:
+            language: Target language code for the recipient.
+
+        Returns:
+            str: Localized empty-response-recovered notification body.
+        """
+        servers = translate_plural("plural.servers_reported", server_count, language)
+        return (
+            translate("notif.sync_suspicious_recovered.title", language, provider=provider)
+            + "\n\n"
+            + translate(
+                "notif.sync_suspicious_recovered.body",
+                language,
+                servers=servers,
+                duration=duration_render(language),
+            )
+        )
+
+    return await _broadcast_to_admins(
+        bot,
+        admin_ids,
+        render,
+        log_label=f"empty-response recovered notification for {provider_label}",
+    )
+
+
 async def send_mass_removal_deferred_notification(
     bot: Bot,
     admin_ids: list[int],

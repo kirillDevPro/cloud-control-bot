@@ -72,6 +72,11 @@ server, supervised background tasks, and heartbeat-based stall detection for una
 - **Guarded server removal** — a provider API that answers "success" with an empty or truncated
   server list cannot wipe a fleet: an empty response is ignored until it persists for about an
   hour, and a mass disappearance is applied only once the next sync cycle reports the same thing.
+  A partial failure is never reported as an empty success either — one unreachable AWS region, or
+  a malformed or truncated page from Vultr, is treated as an outage rather than as an emptied
+  account. Alerts are debounced to match: a single self-healing empty cycle is logged and not
+  sent, a repeated one alerts at most once a day per provider, and a provider whose list comes
+  back gets a "recovered" notice.
 - **Self-healing** — a supervisor restarts crashed background tasks and reconciles missing
   workers; subsystem health (queue fill, live worker count, manager liveness) is monitored.
 

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +23,7 @@ from ..bot.notifications import (
     send_provider_outage_notification,
     send_provider_recovered_notification,
     send_suspicious_api_response_notification,
+    send_empty_response_recovered_notification,
     send_mass_removal_deferred_notification,
 )
 
@@ -49,6 +51,33 @@ DEFERRAL_WARN_CYCLES = 3
 # single empty cycle, while a genuine delete-all still reconciles itself within the hour.
 EMPTY_RESPONSE_CONFIRM_SECONDS = 3600
 
+# How many CONSECUTIVE empty responses must accumulate before the admins hear about it at
+# all. A single empty cycle that heals by the next one is a provider glitch, not news: it
+# removes nothing and resolves itself, so it is logged at WARNING and stays silent. Two is
+# the floor at which "the API keeps saying this" beats "the API hiccuped once".
+EMPTY_ALERT_STREAK = 2
+
+# How long an alias stays quiet after a DELIVERED empty-response alert. A provider that
+# glitches every few hours would otherwise re-alert on every streak, which is the noise
+# this guard exists to remove; the removal itself is never suppressed, only the alert.
+EMPTY_ALERT_COOLDOWN_SECONDS = 86400  # 24 h
+
+# The two halves of an empty-response INCIDENT, both keyed by alias. They live at MODULE
+# level on purpose: the per-alias guard state below is a local of servers_sync_task, so the
+# supervisor recreating that coroutine after a crash would discard them — and both exist
+# precisely to survive the kind of interruption that would otherwise re-open the bug. The
+# guard state keeps the per-cycle EVIDENCE, which a restart is free to forget; these keep
+# the INCIDENT, which it is not. A full PROCESS restart still clears both; persisting them
+# would need the storage layer.
+#
+# Monotonic time of the last DELIVERED alert. Read only by the cooldown, and deliberately
+# NOT cleared on recovery: the point is that a provider glitching repeatedly stays quiet.
+_EMPTY_ALERT_LAST_SENT: dict[str, float] = {}
+# Monotonic time the still-open alerted streak began. PRESENCE means an alert was delivered
+# and a recovery notice is owed; the value is the duration's origin, so it keeps measuring
+# from the real start of the streak even across a restart that forgot the streak itself.
+_EMPTY_RECOVERY_OWED: dict[str, float] = {}
+
 
 def _empty_confirm_cycles(sync_interval: int) -> int:
     """Return how many consecutive empty responses confirm a genuinely empty account.
@@ -73,26 +102,35 @@ class _AliasGuardState:
 
     Attributes:
         empty_cycles: Consecutive empty-but-successful responses seen so far.
-        empty_alerted: Whether the empty-response alert reached an admin (dedupe).
+        empty_since: Monotonic time of the FIRST empty response of the open streak, or
+            None outside one. It seeds the recovery message's duration; once an alert is
+            delivered the durable copy lives in _EMPTY_RECOVERY_OWED, which is what
+            survives a task restart.
         pending: Missing composite keys whose removal awaits confirmation.
         deferral_cycles: Consecutive cycles this alias has been deferring a removal.
         mass_alerted: Whether the deferred-removal alert reached an admin (dedupe).
     """
 
     empty_cycles: int = 0
-    empty_alerted: bool = False
+    empty_since: float | None = None
     pending: frozenset[str] = field(default_factory=frozenset)
     deferral_cycles: int = 0
     mass_alerted: bool = False
 
     def reset_empty(self) -> None:
-        """Clear the empty-response streak and its delivery-deduplication state.
+        """Forget the empty-response streak — the per-cycle EVIDENCE, nothing more.
+
+        It deliberately touches neither module-level half of the incident: not the alert
+        cooldown, which is what stops a provider that glitches repeatedly from re-alerting
+        (the original bug was precisely that the dedupe flag was re-armed here every
+        cycle), and not the owed recovery notice, which only an actual recovery or an
+        applied removal may discharge.
 
         Returns:
             None.
         """
         self.empty_cycles = 0
-        self.empty_alerted = False
+        self.empty_since = None
 
     def reset_removal(self) -> None:
         """Forget a deferred removal that was confirmed, withdrawn, or unconfirmable.
@@ -106,6 +144,12 @@ class _AliasGuardState:
 
     def reset(self) -> None:
         """Forget all guard evidence after an uninformative provider cycle.
+
+        A cycle that raised proved nothing, so neither confirmation may count it. The open
+        INCIDENT is unaffected because it does not live here: an exception arriving
+        mid-streak never means the admins stop being owed the recovery notice they were
+        promised (_EMPTY_RECOVERY_OWED), nor that the alias may be alerted again
+        (_EMPTY_ALERT_LAST_SENT).
 
         Returns:
             None.
@@ -151,14 +195,22 @@ async def _observe_empty_response(
     local_keys: set[str],
     state: _AliasGuardState,
     confirm_cycles: int,
+    cooldown_state: dict[str, float],
+    recovery_owed: dict[str, float],
 ) -> bool:
     """Decide whether an EMPTY provider response may be acted on (GUARD A1).
 
     An empty-but-successful response is what a provider outage looks like when its API
     answers 200 with no data — acting on the first one cost this bot a whole fleet's
     monitoring history. So emptiness must persist for `confirm_cycles` consecutive cycles
-    before it is believed; until then the caller skips the alias entirely and the admins
-    are alerted once (deduplicated on DELIVERED sends only).
+    before it is believed; until then the caller skips the alias entirely.
+
+    ALERTING is deliberately quieter than skipping. The FIRST empty cycle is logged at
+    WARNING and nothing is sent: a glitch that heals by the next cycle removes nothing and
+    is not news. From `EMPTY_ALERT_STREAK` onward one alert goes out, deduplicated on
+    DELIVERED sends only, and then the alias stays quiet for `EMPTY_ALERT_COOLDOWN_SECONDS`
+    however many further streaks it opens. The recovery notice owed by a delivered alert is
+    the CALLER's to send, since only it can see the alias answer again.
 
     Args:
         bot: aiogram Bot instance used to send messages.
@@ -168,12 +220,18 @@ async def _observe_empty_response(
         local_keys: Composite keys currently known locally for that alias.
         state: The alias's guard state (mutated: the empty streak advances here).
         confirm_cycles: Consecutive empty responses required to believe the emptiness.
+        cooldown_state: Monotonic time of the last DELIVERED alert per alias (mutated).
+        recovery_owed: Alias -> monotonic start of the open alerted streak (mutated).
+            Presence means a recovery notice is still owed for that alias.
 
     Returns:
         bool: True if the emptiness is confirmed and its removals may proceed; False if
             the alias must be skipped this cycle.
     """
+    now = time.monotonic()
     state.empty_cycles += 1
+    if state.empty_since is None:
+        state.empty_since = now
     # An empty response says nothing about which servers are missing, so it can never
     # confirm a deferred removal.
     state.reset_removal()
@@ -184,20 +242,47 @@ async def _observe_empty_response(
             f"consecutive cycles; accepting it as a real empty account and removing its "
             f"{len(local_keys)} servers"
         )
+        # The recovery obligation is NOT discharged here: this branch only AUTHORIZES the
+        # removal, and the caller may still skip or fail it downstream. Whoever applies it
+        # clears the obligation, so a removal that never lands leaves the admins owed the
+        # notice they were promised rather than silently owed nothing.
         return True
+
+    if state.empty_cycles < EMPTY_ALERT_STREAK:
+        # One empty cycle is a glitch until a second one agrees with it. Nothing is
+        # removed either way, so there is nothing worth waking an admin for yet.
+        logger.warning(
+            f"Provider {alias} returned an EMPTY server list while {len(local_keys)} "
+            f"servers are known locally ({state.empty_cycles}/{confirm_cycles}); skipping "
+            f"removal, not alerting until the streak reaches {EMPTY_ALERT_STREAK}"
+        )
+        return False
 
     logger.error(
         f"Provider {alias} returned an EMPTY server list while {len(local_keys)} servers "
         f"are known locally ({state.empty_cycles}/{confirm_cycles}); skipping removal"
     )
-    if not state.empty_alerted:
-        # Arm the dedupe only on a confirmed delivery, so a failed send is retried.
-        state.empty_alerted = await send_suspicious_api_response_notification(
-            bot=bot,
-            admin_ids=admin_ids,
-            provider_label=provider_label,
-            local_count=len(local_keys),
+    if alias in recovery_owed:
+        # An incident is already open and its recovery notice is still owed.
+        return False
+
+    last_sent = cooldown_state.get(alias)
+    if last_sent is not None and now - last_sent < EMPTY_ALERT_COOLDOWN_SECONDS:
+        logger.warning(
+            f"Provider {alias} empty-response alert suppressed: the last one was delivered "
+            f"{int(now - last_sent)}s ago, inside the {EMPTY_ALERT_COOLDOWN_SECONDS}s cooldown"
         )
+        return False
+
+    # Arm the dedupe only on a confirmed delivery, so a failed send is retried next cycle.
+    if await send_suspicious_api_response_notification(
+        bot=bot,
+        admin_ids=admin_ids,
+        provider_label=provider_label,
+        local_count=len(local_keys),
+    ):
+        recovery_owed[alias] = state.empty_since
+        cooldown_state[alias] = now
     return False
 
 
@@ -315,10 +400,16 @@ async def servers_sync_task(
 
     Removal is guarded against untrustworthy provider responses, which is what a provider
     outage often looks like — HTTP 200 with a truncated or empty list rather than an error:
-    - An alias whose response is EMPTY while servers are known locally removes nothing and
-      alerts the admins instead — until the emptiness has held for
-      EMPTY_RESPONSE_CONFIRM_SECONDS, at which point an actually-emptied account stops
-      being indistinguishable from an outage and the removal proceeds (_observe_empty_response).
+    - An alias whose response is EMPTY while servers are known locally removes nothing
+      until the emptiness has held for EMPTY_RESPONSE_CONFIRM_SECONDS, at which point an
+      actually-emptied account stops being indistinguishable from an outage and the
+      removal proceeds (_observe_empty_response). The ALERT is quieter than the skip: the
+      first empty cycle is logged only, an alert goes out from EMPTY_ALERT_STREAK
+      consecutive cycles onward and then at most once per EMPTY_ALERT_COOLDOWN_SECONDS per
+      alias, and an alias that answers again after an ALERTED streak gets a recovery
+      notice. At the default sync interval EMPTY_RESPONSE_CONFIRM_SECONDS already
+      confirms at the second cycle, so there the removal notifications are the signal and
+      the suspicious-response alert does not precede them.
     - An alias losing at least MIN_DEFERRABLE_REMOVALS servers AND more than
       max_removal_ratio of its fleet in one cycle has that removal DEFERRED until the next
       cycle reports the identical missing set. A failed fetch or unconfirmed empty response
@@ -331,9 +422,15 @@ async def servers_sync_task(
     (auth/permissions) alert immediately. A recovery notification is sent when a
     provider with an open incident responds again. An unconfirmed empty response does NOT
     count as recovery; an empty response accepted after the full guard threshold does.
-    Per-alias alert and deferral state lives in memory across loop iterations, so a
-    supervisor-driven task restart costs at most one extra confirmation cycle (and may
-    repeat an alert).
+    The failure counters and the GUARD A2 deferral evidence live in memory across loop
+    iterations, so a supervisor-driven task restart costs them at most one extra
+    confirmation cycle. The empty-response alert COOLDOWN and its owed recovery notice do
+    NOT: module-level _EMPTY_ALERT_LAST_SENT and _EMPTY_RECOVERY_OWED preserve both across
+    such a restart, while a full process restart still clears them.
+    KNOWN GAP, pre-dating this mechanism and NOT addressed here: `incident_kind` is a plain
+    local, so an OUTAGE incident open at restart time loses its recovery notice outright
+    rather than one cycle of it — the same class the two maps above close for the
+    empty-response case.
 
     Args:
         bot: aiogram Bot instance used to send messages.
@@ -363,8 +460,8 @@ async def servers_sync_task(
     # key means no alert is currently open. The kind drives deduplication and the
     # transient -> persistent escalation (auth matters more than a prolonged 5xx).
     incident_kind: dict[str, str] = {}
-    # Removal-guard memory, one object per alias (see _AliasGuardState). Alert dedupe
-    # inside it is armed only after a DELIVERED send, so a failed alert is retried next
+    # Removal-guard memory, one object per alias (see _AliasGuardState). Its mass-removal
+    # alert dedupe is armed only after a DELIVERED send, so a failed alert is retried next
     # cycle — the same delivery-confirmed rule the ping and balance alerts follow.
     guard_state: dict[str, _AliasGuardState] = {}
     empty_confirm_cycles = _empty_confirm_cycles(sync_interval)
@@ -403,9 +500,22 @@ async def servers_sync_task(
                     provider_label = _provider_label(config, alias)
                     state = guard_state.setdefault(alias, _AliasGuardState())
 
-                    if isinstance(result, Exception):
+                    # BaseException, not Exception, and NEVER re-raised. A CancelledError
+                    # can arrive here as a VALUE, captured by a nested return_exceptions
+                    # gather (AWSProvider.get_servers' own, then gather_server_lists'),
+                    # which means ONE sub-fetch was cancelled — not this task being torn
+                    # down. A genuine shutdown travels the await chain instead and is
+                    # re-raised by the handler at the end of this function.
+                    # Both neighbouring temptations are wrong:
+                    #   - matching only Exception drops it from BOTH branches, so the
+                    #     alias is skipped with its failure never counted and its guard
+                    #     evidence never cleared;
+                    #   - re-raising it marks the WHOLE task cancelled, and the supervisor
+                    #     reads a cancelled task as an intentional stop (no restart, no
+                    #     alert), so the entire sync loop would die silently.
+                    if isinstance(result, BaseException):
                         logger.error(
-                            f"Failed to fetch servers from {alias}: {result}",
+                            f"Failed to fetch servers from {alias}: {result!r}",
                             exc_info=result,
                         )
 
@@ -414,10 +524,15 @@ async def servers_sync_task(
 
                         # A cycle that could not compare anything cannot confirm a
                         # deferred removal or an empty account either: both confirmations
-                        # must be CONSECUTIVE.
+                        # must be CONSECUTIVE. An OPEN empty incident survives in
+                        # _EMPTY_RECOVERY_OWED, so the recovery notice is still owed once
+                        # the alias answers with servers again.
                         state.reset()
 
-                        if is_transient_error(result):
+                        # A non-Exception BaseException (a cancelled sub-fetch) is
+                        # self-healing by nature and carries no auth meaning, so it takes
+                        # the debounced transient path rather than the immediate alert.
+                        if not isinstance(result, Exception) or is_transient_error(result):
                             # Transient failure (5xx/timeout/rate-limit): self-healing.
                             # Alert only once it becomes sustained, and only once.
                             # If an incident (of any kind) is already open for this
@@ -466,6 +581,8 @@ async def servers_sync_task(
                                 local_keys=local_keys,
                                 state=state,
                                 confirm_cycles=empty_confirm_cycles,
+                                cooldown_state=_EMPTY_ALERT_LAST_SENT,
+                                recovery_owed=_EMPTY_RECOVERY_OWED,
                             )
                             if not confirmed:
                                 continue
@@ -474,6 +591,31 @@ async def servers_sync_task(
                             # empty-response floor for this alias).
                             confirmed_empty_aliases.add(alias)
                         else:
+                            # The alias answered with servers again. Close the empty
+                            # incident if one was actually reported — a streak that stayed
+                            # under the alert threshold was never announced, so announcing
+                            # its recovery would be noise of exactly the kind removed here.
+                            # When a provider-outage incident closes in this same cycle its
+                            # own recovery message below covers it; two would be redundant.
+                            owed_since = _EMPTY_RECOVERY_OWED.get(alias)
+                            if owed_since is not None:
+                                # NOTE: no carve-out for an alias that also has an open
+                                # outage incident. Substituting the provider-recovered
+                                # message below would discharge this debt on a send whose
+                                # delivery nobody checks, and the alias is fully recovered
+                                # by the next cycle, so a failed substitute would never be
+                                # retried. One extra message beats a lost one.
+                                if await send_empty_response_recovered_notification(
+                                    bot=bot,
+                                    admin_ids=admin_ids,
+                                    provider_label=provider_label,
+                                    duration_seconds=int(time.monotonic() - owed_since),
+                                    server_count=len(result),
+                                ):
+                                    # Discharge only on a CONFIRMED delivery, the same
+                                    # rule the alert itself follows: a Telegram failure
+                                    # here must be retried next cycle, not swallowed.
+                                    _EMPTY_RECOVERY_OWED.pop(alias, None)
                             state.reset_empty()
 
                         # Provider responded: close any open incident for it.
@@ -528,6 +670,12 @@ async def servers_sync_task(
                     successful_aliases=removal_authorized,
                     empty_ok_aliases=confirmed_empty_aliases,
                 )
+
+                # The removal actually landed, and the per-server notifications below
+                # announce it. THAT is what discharges an open empty incident — not the
+                # guard's authorization, which can still be skipped downstream.
+                for confirmed_alias in confirmed_empty_aliases:
+                    _EMPTY_RECOVERY_OWED.pop(confirmed_alias, None)
 
                 added_servers = sync_result["added_servers"]
                 removed_servers = sync_result["removed_servers"]

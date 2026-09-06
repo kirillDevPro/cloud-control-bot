@@ -301,6 +301,11 @@ MESSAGES: dict[str, str] = {
     'notif.sync_suspicious.footer': (
         'Если список правда пуст и останется таким около часа, серверы будут удалены автоматически.'
     ),
+    'notif.sync_suspicious_recovered.title': '✅ <b>Список серверов вернулся: {provider}</b>',
+    'notif.sync_suspicious_recovered.body': (
+        'API снова отдаёт {servers} после {duration} пустых ответов. '
+        'Ничего не удалено.'
+    ),
     'notif.sync_mass_removal.title': '⚠️ <b>Массовое удаление отложено: {provider}</b>',
     'notif.sync_mass_removal.body': (
         'Из ответа API разом пропало {count} серверов из {total}. '
@@ -417,6 +422,11 @@ PLURALS: dict[str, list[str]] = {
         '⏳ <b>Прогноз:</b> ~{n} дней до исчерпания',
     ],
     # plural
+    'plural.servers_reported': [
+        '{n} сервер',
+        '{n} сервера',
+        '{n} серверов',
+    ],
     'plural.checks_in_row': [
         '{n} проверка подряд',
         '{n} проверки подряд',

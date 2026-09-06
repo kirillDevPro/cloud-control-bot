@@ -302,6 +302,11 @@ MESSAGES: dict[str, str] = {
         'Якщо список справді порожній і залишиться таким близько години, сервери буде видалено '
         'автоматично.'
     ),
+    'notif.sync_suspicious_recovered.title': '✅ <b>Список серверів повернувся: {provider}</b>',
+    'notif.sync_suspicious_recovered.body': (
+        'API знову віддає {servers} після {duration} порожніх відповідей. '
+        'Нічого не видалено.'
+    ),
     'notif.sync_mass_removal.title': '⚠️ <b>Масове видалення відкладено: {provider}</b>',
     'notif.sync_mass_removal.body': (
         'З відповіді API за раз зникло {count} серверів із {total}. '
@@ -418,6 +423,11 @@ PLURALS: dict[str, list[str]] = {
         '⏳ <b>Прогноз:</b> ~{n} днів до вичерпання',
     ],
     # plural
+    'plural.servers_reported': [
+        '{n} сервер',
+        '{n} сервери',
+        '{n} серверів',
+    ],
     'plural.checks_in_row': [
         '{n} перевірка поспіль',
         '{n} перевірки поспіль',

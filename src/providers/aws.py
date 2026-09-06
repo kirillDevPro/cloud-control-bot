@@ -130,6 +130,13 @@ class AWSProvider(BaseProvider, RetryMixin):
         self._target_regions: list[str] | None = regions
         self._all_regions_cache: list[str] | None = None
 
+        # Fetch keys ("<service>:<region>") that held at least one server the last time
+        # EVERY fetch answered. A transient failure of one of these must never be reported
+        # as "no servers there": the region is UNKNOWN this cycle, not empty. None means
+        # no such complete answer has been seen yet, so NOTHING may be called empty —
+        # the state this attribute is in after every process restart.
+        self._populated_fetches: frozenset[str] | None = None
+
         # Semaphore limiting the number of concurrent requests
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
@@ -592,59 +599,102 @@ class AWSProvider(BaseProvider, RetryMixin):
         Fetch all EC2 and Lightsail instances across all regions.
 
         Returns:
-            List[Server]: List of all servers
+            List[Server]: List of all servers. A PARTIAL list is returned only when every
+            failed fetch was known EMPTY by a previous COMPLETE answer — never merely
+            unobserved, so a restart cannot downgrade the guarantee.
 
         Raises:
             AWSAuthenticationError: If persistent credential errors occur.
             AWSPermissionError: If persistent permission errors occur.
-            AWSAPIError: On other fatal AWS API errors. Transient per-region
-                failures are logged and skipped.
+            AWSAPIError: On other fatal AWS API errors, and — re-raised as the original
+                transient error — whenever a transient per-region failure would otherwise
+                make this account look EMPTY or make a previously-populated region look
+                empty. Transient failures of regions that held no servers last time are
+                logged and skipped, and the partial list is returned.
         """
         all_servers: list[Server] = []
 
         try:
             regions = await self._get_target_regions()
 
-            # Build tasks to fetch servers from all regions in parallel
+            # Build tasks to fetch servers from all regions in parallel, keeping a key
+            # per task so a gathered result can be attributed back to its fetch.
             tasks = []
+            fetch_keys: list[str] = []
 
             for region in regions:
                 if self.enable_ec2:
                     tasks.append(self._get_ec2_instances_in_region(region))
+                    fetch_keys.append(f"EC2:{region}")
 
                 if self.enable_lightsail:
                     tasks.append(self._get_lightsail_instances_in_region(region))
+                    fetch_keys.append(f"Lightsail:{region}")
 
             # Run all requests in parallel
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Process the results, tracking how many region/service fetches SUCCEEDED.
-            succeeded = 0
-            transient_error: Exception | None = None
-            for result in results:
-                if isinstance(result, Exception):
+            # Process the results, tracking WHICH fetches failed and which held servers.
+            failed_keys: set[str] = set()
+            populated_keys: set[str] = set()
+            transient_error: BaseException | None = None
+            for key, result in zip(fetch_keys, results):
+                # BaseException, not Exception: gather(return_exceptions=True) puts a
+                # CancelledError in the slot of a child that was cancelled individually,
+                # and CancelledError is a BaseException. Matching only Exception would let
+                # it fall through BOTH branches below and vanish from every bucket — the
+                # exact "a failure counted as nothing" shape this accounting exists to end.
+                if isinstance(result, BaseException):
                     # Persistent auth/permission → propagate immediately so servers_sync
                     # raises the immediate alert and does NOT treat a partial/empty list
                     # as success (which would delete this account's servers).
                     if isinstance(result, (AWSAuthenticationError, AWSPermissionError)):
                         raise result
-                    # Transient region/service failure: remember it; keep per-region
-                    # resilience only if at least one other fetch actually succeeds.
-                    logger.error(f"[FAIL] Error fetching servers: {result}")
+                    # Transient region/service failure: remember it; whether it may be
+                    # skipped is decided below, once every result is in.
+                    logger.error(f"[FAIL] Error fetching servers from {key}: {result}")
+                    failed_keys.add(key)
                     transient_error = transient_error or result
                     continue
 
                 # Type guard: verify that result is a list of servers
                 if isinstance(result, list):
-                    succeeded += 1
+                    if result:
+                        populated_keys.add(key)
                     all_servers.extend(result)
 
-            # If EVERY enabled region/service fetch failed transiently (e.g. a network
-            # outage across all regions), raise instead of returning an empty "success":
-            # is_transient_error then classifies it transient (debounced alert) and
-            # servers_sync skips removals for this alias rather than wiping its servers.
-            if transient_error is not None and succeeded == 0:
+            # A transient failure must never be reported as an EMPTY success. Three cases
+            # make this account look emptier than it is, and all three raise instead —
+            # then is_transient_error classifies the error transient, servers_sync
+            # debounces the alert over OUTAGE_ALERT_THRESHOLD cycles and removes nothing:
+            #   1. nothing was fetched at all, so the whole account reads as empty;
+            #   2. no baseline exists yet (first call, or every call since this process
+            #      started was itself partial), so NO failed fetch can be called empty
+            #      rather than unknown — without this, the first cycle after a restart
+            #      offers exactly the protection the old succeeded == 0 rule did;
+            #   3. a fetch that HELD servers failed, so its region reads as empty while it
+            #      is merely unknown — the removal guards would confirm the identical
+            #      missing set on the next cycle and wipe it.
+            known_populated = self._populated_fetches
+            if transient_error is not None and (
+                not all_servers
+                or known_populated is None
+                or bool(failed_keys & known_populated)
+            ):
                 raise transient_error
+
+            if failed_keys:
+                logger.warning(
+                    f"[WARN] {len(failed_keys)} AWS fetch(es) failed transiently and held "
+                    f"no servers last time; returning {len(all_servers)} servers from the "
+                    f"others: {sorted(failed_keys)}"
+                )
+            else:
+                # Only a COMPLETE answer can say a fetch is EMPTY rather than UNKNOWN, so
+                # the baseline is refreshed here and nowhere else. A partial return leaves
+                # it untouched: forgetting a region that merely failed is what would let a
+                # later failure of it pass as "known empty" for the rest of the process.
+                self._populated_fetches = frozenset(populated_keys)
 
             return all_servers
 
@@ -681,12 +731,14 @@ class AWSProvider(BaseProvider, RetryMixin):
             service_label: Service label for logs (e.g. "EC2")
 
         Returns:
-            list[Server]: Parsed, non-terminated instances; empty list if the
-            region is unavailable or an error occurs.
+            list[Server]: Parsed, non-terminated instances; an empty list only when the
+            region genuinely holds none. A failure RAISES rather than reading as empty.
 
         Raises:
             AWSAuthenticationError: If credentials are invalid.
             AWSPermissionError: If IAM permissions are insufficient.
+            AWSAPIError: On any other failure, including transient ones — the caller
+                distinguishes them, so this must never degrade into an empty list.
         """
         # Use the semaphore to limit the number of concurrent requests
         async with self._semaphore:
@@ -711,8 +763,9 @@ class AWSProvider(BaseProvider, RetryMixin):
             except Exception as e:
                 # Transient failures (5xx/throttling/network/...) must propagate too,
                 # so get_servers can tell a FAILED region from a legitimately-empty one
-                # and never report a total outage as an empty "success". It re-raises only
-                # if EVERY enabled fetch failed; otherwise it keeps per-region resilience.
+                # and never report a partial outage as an empty "success". It re-raises
+                # whenever the result would be empty or a previously-populated fetch
+                # failed; otherwise it keeps per-region resilience.
                 logger.error(
                     f"[FAIL] Error fetching {service_label} in {region}: {e}", exc_info=True
                 )
@@ -767,6 +820,12 @@ class AWSProvider(BaseProvider, RetryMixin):
         Returns:
             list[Server]: Parsed Lightsail instances from the region, or an
             empty list when Lightsail is unavailable there.
+
+        Raises:
+            AWSAuthenticationError: If credentials are invalid.
+            AWSPermissionError: If IAM permissions are insufficient.
+            AWSAPIError: If pagination exceeds MAX_PAGINATION_PAGES or another fetch
+                fails, so a truncated or failed result is never returned as complete.
         """
         # Skip regions where Lightsail is unavailable
         if region in LIGHTSAIL_UNAVAILABLE_REGIONS:
@@ -789,11 +848,15 @@ class AWSProvider(BaseProvider, RetryMixin):
             while True:
                 page_count += 1
                 if page_count > MAX_PAGINATION_PAGES:
-                    logger.error(
-                        f"[FAIL] Page limit exceeded ({MAX_PAGINATION_PAGES}) "
-                        f"for Lightsail in region {region}"
+                    # RAISE rather than return what was collected: a truncated list is a
+                    # PARTIAL failure, and returning it as a success is the same
+                    # empty/short-success bug get_servers now guards against — the
+                    # removal guards would see the identical missing set twice and
+                    # confirm it. Raising marks this fetch failed instead.
+                    raise AWSAPIError(
+                        f"Page limit exceeded ({MAX_PAGINATION_PAGES}) for Lightsail "
+                        f"in region {region}; the API may be returning a bad pageToken"
                     )
-                    break
 
                 params: dict[str, str] = {}
                 if page_token:

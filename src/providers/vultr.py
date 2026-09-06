@@ -22,6 +22,27 @@ from .mixins import HttpClientMixin, RetryConfig, RetryMixin
 logger = logging.getLogger(__name__)
 
 
+def _describe_body(data: Any) -> str:
+    """Describe a malformed API response by its SHAPE, never by its values.
+
+    A response body carries server labels, addresses and other fleet data, and an error
+    built from it travels into log files. The shape — the type, and which top-level keys
+    came back — is what actually diagnoses a malformed response, so nothing is gained by
+    carrying the values along and a whole class of exposure is avoided by not doing it.
+
+    Args:
+        data: The decoded response body, of whatever type it turned out to be.
+
+    Returns:
+        str: A values-free description, e.g. "dict(keys=['error', 'meta'])".
+    """
+    if isinstance(data, dict):
+        return f"dict(keys={sorted(str(key) for key in data)[:20]})"
+    if isinstance(data, list):
+        return f"list(len={len(data)})"
+    return f"{type(data).__name__}"
+
+
 class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
     """
     Provider for working with the Vultr API v2.
@@ -198,7 +219,16 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
             per_page: Number of items per page (max 500)
 
         Returns:
-            List[Dict]: All items across every page
+            List[Dict]: All items across every page. A COMPLETE list or nothing — this
+            method never returns a partial one.
+
+        Raises:
+            VultrAPIError: If the response body is malformed (the data key missing or not
+                a list, or a full page lacking a usable `meta.links.next` cursor or
+                explicit empty end marker), or if pagination exceeds
+                MAX_PAGINATION_PAGES. Each of these would otherwise be reported as an
+                empty or truncated SUCCESS, which downstream cannot tell from servers
+                having genuinely disappeared.
         """
         all_items: list[dict[str, Any]] = []
         cursor: str | None = None
@@ -209,11 +239,19 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             # Guard against an infinite loop
             if page > self.MAX_PAGINATION_PAGES:
-                logger.error(
-                    f"Page limit exceeded ({self.MAX_PAGINATION_PAGES}) for {endpoint}. "
-                    f"The API may have returned an invalid cursor. Aborting pagination."
+                # RAISE rather than return what was collected so far: a truncated list
+                # reported as a success is indistinguishable from servers having been
+                # deleted, and a deterministic cursor loop produces the IDENTICAL
+                # truncated set on the next cycle, which is exactly what the removal
+                # guards accept as confirmation.
+                raise VultrAPIError(
+                    message=(
+                        f"Page limit exceeded ({self.MAX_PAGINATION_PAGES}) for {endpoint}; "
+                        f"the API may have returned an invalid cursor"
+                    ),
+                    status_code=None,
+                    response_body=None,
                 )
-                break
 
             # Build the URL with query parameters
             url = f"{self.base_url}{endpoint}?per_page={per_page}"
@@ -231,17 +269,49 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             data = await self._retry_with_backoff(make_request)
 
-            # Append the items from the current page
-            items = data.get(data_key, [])
+            # Append the items from the current page. An ABSENT key is NOT an empty page:
+            # `{"instances": []}` is a legitimately empty account, while a body missing the
+            # key altogether is a degraded 200 that would otherwise be reported as an empty
+            # SUCCESS and read downstream as "this account has no servers".
+            items = data.get(data_key) if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                raise VultrAPIError(
+                    message=(
+                        f"Malformed Vultr API response for {endpoint}: "
+                        f"'{data_key}' is missing or is not a list"
+                    ),
+                    status_code=200,
+                    response_body=_describe_body(data),
+                )
             all_items.extend(items)
 
             # Check whether a next page exists
             # IMPORTANT: explicitly distinguish None from an empty string ""
-            next_cursor = data.get("meta", {}).get("links", {}).get("next")
+            meta = data.get("meta")
+            links = meta.get("links") if isinstance(meta, dict) else None
+            next_cursor: Any = links.get("next") if isinstance(links, dict) else None
 
-            # Verify that the cursor is a non-empty string
-            # (guards against the empty string "", None and other falsy values)
-            if not next_cursor or not isinstance(next_cursor, str) or not next_cursor.strip():
+            # A usable cursor continues; an EXPLICIT empty string is Vultr's documented
+            # end-of-list marker and stops. Anything else — a missing envelope, a missing
+            # or non-string "next" — says nothing about whether more pages exist.
+            has_cursor = isinstance(next_cursor, str) and bool(next_cursor.strip())
+            says_last_page = isinstance(next_cursor, str) and not next_cursor.strip()
+
+            if not has_cursor:
+                if len(items) >= per_page and not says_last_page:
+                    # A page filled to capacity with no cursor AND no end marker cannot be
+                    # told from a truncated one, so believing it is the silent-truncation
+                    # bug this guard exists to remove. A SHORT page is self-evidently the
+                    # last one and needs no envelope to be believed.
+                    raise VultrAPIError(
+                        message=(
+                            f"Malformed Vultr API response for {endpoint}: a full page of "
+                            f"{len(items)} items arrived with no usable meta.links.next "
+                            f"cursor and no end-of-list marker"
+                        ),
+                        status_code=200,
+                        response_body=_describe_body(data),
+                    )
                 break
 
             cursor = next_cursor
@@ -282,10 +352,12 @@ class VultrProvider(BaseProvider, HttpClientMixin, RetryMixin):
         By default the Vultr API returns at most 100 servers.
 
         Returns:
-            List[Server]: List of all servers
+            List[Server]: List of all servers. Never a partial or empty list standing in
+            for a failure — those raise, so servers_sync takes its debounced-outage path.
 
         Raises:
-            httpx.HTTPError: On API errors
+            VultrAPIError: On API errors and on a malformed or truncated response
+                (_transform_error converts every httpx failure into this type).
         """
         try:
             # Fetch all instances via pagination
