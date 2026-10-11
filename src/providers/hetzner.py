@@ -301,13 +301,11 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
             )
             ip = "0.0.0.0"
 
-        # Region (datacenter location)
+        # Region (top-level location; the API dropped the server's datacenter object)
         region = "unknown"
-        datacenter = server_data.get("datacenter", {})
-        if datacenter:
-            location = datacenter.get("location", {})
-            if location:
-                region = location.get("name", "unknown")  # nbg1, fsn1, hel1, etc.
+        location = server_data.get("location", {})
+        if location:
+            region = location.get("name", "unknown")  # nbg1, fsn1, hel1, etc.
 
         # Plan (server type)
         plan = "unknown"
