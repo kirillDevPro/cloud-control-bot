@@ -221,6 +221,10 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
         Returns:
             List of all items across all pages
+
+        Raises:
+            HetznerAPIError: If a page lacks the data key (or it is not a list), or if
+                pagination exceeds MAX_PAGINATION_PAGES.
         """
         all_items: list[dict[str, Any]] = []
         page = 1
@@ -235,8 +239,15 @@ class HetznerProvider(BaseProvider, HttpClientMixin, RetryMixin):
 
             data = await self._retry_with_backoff(make_request)
 
-            # Append the items from the current page
-            items = data.get(data_key, [])
+            # Append the items from the current page. An ABSENT key is NOT an empty page:
+            # a body missing it is a degraded 200 that would otherwise be reported as an
+            # empty SUCCESS and read downstream as "this account has no servers".
+            items = data.get(data_key) if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                raise HetznerAPIError(
+                    f"Malformed Hetzner API response for {endpoint}: "
+                    f"'{data_key}' is missing or not a list"
+                )
             all_items.extend(items)
             pages_fetched += 1
 
