@@ -14,7 +14,7 @@ pydantic-settings==2.16.0
 pyyaml==6.0.3
 
 # Time-zone handling
-pytz==2026.4
+pytz==2026.5
 
 # X.509 certificate parsing for SSL-expiry checks (tz-aware not_valid_after_utc)
 cryptography==50.0.1
