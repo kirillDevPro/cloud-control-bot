@@ -14,7 +14,7 @@
   <a href="https://docs.aiogram.dev/"><img src="https://img.shields.io/badge/aiogram-3.x-2CA5E0?logo=telegram&logoColor=white" alt="aiogram 3.x"></a>
   <img src="https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20UK%20%7C%20ES-success" alt="i18n: EN | RU | UK | ES">
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
-  <a href="#status"><img src="https://img.shields.io/badge/verified%20working-2026--10--16-brightgreen" alt="Verified working: 2026-10-16"></a>
+  <a href="#status"><img src="https://img.shields.io/badge/verified%20working-2026--10--30-brightgreen" alt="Verified working: 2026-10-30"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange.svg" alt="License: PolyForm Noncommercial 1.0.0"></a>
   <a href="https://github.com/kirillDevPro/cloud-control-bot/stargazers"><img src="https://img.shields.io/github/stars/kirillDevPro/cloud-control-bot?style=social" alt="GitHub stars"></a>
 </p>
@@ -53,7 +53,7 @@ server, supervised background tasks, and heartbeat-based stall detection for una
 Maintained and in daily production use. A working check runs every week against a live
 deployment; rare commits mean the bot is stable, not abandoned.
 
-Verified working: 2026-10-16
+Verified working: 2026-10-30
 
 ---
 
