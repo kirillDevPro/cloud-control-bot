@@ -3,5 +3,5 @@
 # release of ruff/mypy can otherwise turn a green PR red on untouched code.
 # Tool configuration lives in pyproject.toml.
 
-ruff==0.17.3
+ruff==0.17.4
 mypy==2.4.1
